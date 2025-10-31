@@ -28,8 +28,8 @@ def configure_ai_model():
         return None
     try:
         genai.configure(api_key=API_KEY)
-        # Usando o gemini-1.5-flash-latest para velocidade e custo-benefício
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # Usando o gemini-pro para velocidade e custo-benefício
+        model = genai.GenerativeModel('gemini-pro')
         return model
     except Exception as e:
         print(f"Erro ao configurar o modelo Gemini: {e}")
