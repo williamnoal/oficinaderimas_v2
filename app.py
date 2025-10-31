@@ -8,105 +8,160 @@ from datetime import datetime
 from math import cos as _cos, sin as _sin
 from collections import defaultdict
 
-# --- 1. CONFIGURAÇÃO DO FLASK E API ---
+# --- 1. CONFIGURAÇÃO DA APLICAÇÃO FLASK E API GEMINI ---
 
 app = Flask(__name__)
 
-# Carrega a Chave da API a partir de variáveis de ambiente
-# (Substitui o st.secrets do Streamlit)
+# Configuração da API Key
+# O Render (serviço de deploy) irá injetar esta variável do "Environment"
 API_KEY = os.environ.get('GOOGLE_API_KEY')
-if not API_KEY:
-    print("ERRO: A variável de ambiente GOOGLE_API_KEY não foi definida.")
-    # Em um app real, você poderia lançar um erro aqui
-    # raise ValueError("GOOGLE_API_KEY não definida")
-
-genai.configure(api_key=API_KEY)
 model = None
 
-def get_ai_model():
-    """Configura e retorna o modelo de IA."""
+def configure_ai_model():
+    """Configura e retorna o modelo de IA. Lida com erros de chave."""
     global model
+    if model:
+        return model
+    
+    if not API_KEY:
+        print("ERRO CRÍTICO: Variável de ambiente GOOGLE_API_KEY não encontrada.")
+        return None
+    try:
+        genai.configure(api_key=API_KEY)
+        # Usando o gemini-1.5-flash-latest para velocidade e custo-benefício
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        return model
+    except Exception as e:
+        print(f"Erro ao configurar o modelo Gemini: {e}")
+        return None
+
+def generate_ai_content(prompt_text, force_json=False):
+    """Função central para chamadas de IA, com retry e parsing de JSON."""
+    model = configure_ai_model()
     if model is None:
+        raise Exception("Modelo de IA não inicializado.")
+
+    try:
+        # Configuração para forçar a saída em JSON se solicitado
+        generation_config = {}
+        if force_json:
+            generation_config["response_mime_type"] = "application/json"
+
+        response = model.generate_content(prompt_text, generation_config=generation_config)
+        
+        text = response.text
+        
+        # Limpeza robusta para extrair JSON de blocos de markdown
+        if force_json or '[' in text or '{' in text:
+            match = re.search(r'```(json)?(.*)```', text, re.DOTALL | re.IGNORECASE)
+            if match:
+                text = match.group(2).strip()
+            
+            # Tenta carregar o JSON
+            return json.loads(text)
+        
+        # Retorna texto plano se não for JSON
+        return text
+
+    except Exception as e:
+        print(f"Erro na geração de conteúdo da IA: {e}")
+        print(f"Prompt que falhou: {prompt_text}")
+        # Tenta extrair a resposta de erro da API se disponível
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            return model
-        except Exception as e:
-            print(f"Erro ao configurar o modelo Gemini: {e}")
-            return None
-    return model
+            error_details = json.loads(str(e))
+            if 'message' in error_details:
+                raise Exception(f"Erro da API Gemini: {error_details['message']}")
+        except:
+            pass # Mantém a exceção original
+        raise Exception(f"Falha ao gerar ou processar resposta da IA: {e}")
 
-# --- 2. LÓGICA DE IA (Adaptada dos seus arquivos) ---
 
-# Prompts aprimorados para melhor feedback pedagógico (DUA/BNCC)
+# --- 2. LÓGICA DE IA PEDAGÓGICA (PROMPTS OTIMIZADOS) ---
 
-def get_ai_themes(interest_text):
-    """Gera temas com base nos interesses do aluno."""
-    model = get_ai_model()
-    if model is None:
-        return ["Erro: Modelo de IA não configurado."]
-    
+@app.route('/api/generate-themes', methods=['POST'])
+def api_generate_themes():
+    """
+    (DUA - Recrutar Interesse)
+    Gera temas com base nos interesses do aluno.
+    """
+    data = request.json
+    interest = data.get('interest', 'amigos e escola')
+
+    # PROMPT OTIMIZADO: Mais específico, focado no 6º ano, formato JSON forçado.
     prompt = f"""
-    Aja como um gerador de ideias para um jovem escritor de 11 a 13 anos (6º ano).
-    A tarefa é criar 10 temas para um poema baseados nas palavras que o aluno escreveu.
-    Palavras de Inspiração do Aluno:
-    "{interest_text}"
-    Sua Missão:
-    Ofereça dez temas para um poema que se relacionem DIRETAMENTE com o que ele colocou. Os temas devem ser concretos, curtos e estimulantes.
-    Formato OBRIGATÓRIO da Resposta:
-    Retorne APENAS uma lista Python válida contendo 10 strings.
+    Aja como um pedagogo e poeta, especialista em alunos do 6º ano (11-13 anos).
+    O aluno escreveu sobre seus interesses: "{interest}"
+
+    Sua tarefa é gerar 9 temas de poemas.
+
+    REGRAS:
+    1.  Os temas devem ser CONCRETOS e VISUAIS (ex: "O barulho do sinal do recreio", "Meu tênis de futsal gasto").
+    2.  Evite temas abstratos (ex: "A beleza da amizade").
+    3.  Os temas devem ser curtos (3-5 palavras).
+    4.  A linguagem deve ser lúdica e moderna.
+    5.  Retorne uma lista de strings.
+
+    Exemplo de Resposta:
+    ["O cheiro da chuva no asfalto", "A cor do meu jogo favorito", "O silêncio do meu quarto à noite"]
     """
     try:
-        response = model.generate_content(prompt)
-        match = re.search(r'\[.*\]', response.text, re.DOTALL)
-        if match:
-            list_str = match.group(0)
-            themes = eval(list_str)
-            if isinstance(themes, list) and len(themes) > 0:
-                return themes
-        return ["O Assistente não conseguiu criar temas. Tente novamente."]
-    except Exception:
-        return ["O Assistente teve um problema para criar temas."]
+        themes = generate_ai_content(prompt, force_json=True)
+        if not isinstance(themes, list) or len(themes) == 0:
+            raise Exception("A IA não retornou uma lista de temas.")
+        return jsonify({"themes": themes})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-def get_ai_ideas(theme):
+@app.route('/api/generate-ideas', methods=['POST'])
+def api_generate_ideas():
     """
-    Gera ideias de progressão (DUA/BNCC) focadas em recursos semânticos e sensoriais.
-    Alinhado com (EF67LP31) - "utilizando recursos... semânticos e sonoros".
+    (DUA - Sustentar Esforço / BNCC - EF67LP31)
+    Gera ideias de progressão focadas em recursos semânticos e sensoriais.
     """
-    model = get_ai_model()
-    if model is None:
-        return ["Erro: Modelo de IA não configurado."]
-    
+    data = request.json
+    theme = data.get('theme', 'um dia de chuva')
+
+    # PROMPT OTIMIZADO: Foco direto na BNCC (EF67LP31 - recursos semânticos/sonoros) e DUA (foco nos sentidos).
     prompt = f"""
-    Aja como um professor de escrita criativa (Ensino Fundamental II), guiando um aluno (11-13 anos) no tema: '{theme}'.
-    Sua tarefa é criar 8 ideias de progressão (perguntas ou comandos) que incentivem o uso de recursos da BNCC (EF67LP31).
+    Aja como um tutor de escrita criativa para um aluno do 6º ano.
+    O tema do poema é: "{theme}".
 
-    **Diretrizes (DUA e BNCC):**
-    1.  **Foco nos Sentidos:** Incentive o aluno a pensar em cheiros, sons, cores e sensações.
-    2.  **Recursos Semânticos:** Sugira o uso de comparações ("Como se parece com...?") e metáforas simples ("Que cor teria esse sentimento?").
-    3.  **Concretude:** Mantenha as ideias fáceis de visualizar.
-    4.  **Simplicidade:** Vocabulário acessível, mas inspirador.
-    5.  **NÃO ESCREVA VERSOS:** Apenas as ideias/perguntas.
+    Sua tarefa é gerar 8 perguntas ou comandos criativos para ajudar o aluno a desenvolver o poema.
+    As perguntas devem focar nos 5 SENTIDOS e em RECURSOS SEMÂNTICOS (comparações, metáforas simples).
 
-    FORMATO DA RESPOSTA: Retorne APENAS uma lista Python com 8 strings.
+    REGRAS:
+    1.  NÃO escreva versos, apenas perguntas/comandos.
+    2.  Use linguagem acessível (11-13 anos).
+    3.  Seja específico e sensorial.
+    4.  Retorne uma lista de strings.
+
+    Exemplos de perguntas boas:
+    - "Que cheiro o tema '{theme}' tem?"
+    - "Se '{theme}' fosse um som, como ele seria?"
+    - "Tente descrever '{theme}' usando uma comparação (ex: 'é como...')."
+    - "Que cores você vê quando pensa em '{theme}'?"
     """
     try:
-        response = model.generate_content(prompt)
-        match = re.search(r'\[.*\]', response.text, re.DOTALL)
-        if match:
-            list_str = match.group(0)
-            suggestions = eval(list_str)
-            if isinstance(suggestions, list) and len(suggestions) > 0:
-                return suggestions
-        return ["O Assistente não conseguiu gerar ideias. Tente novamente!"]
-    except Exception:
-        return ["O Assistente teve um problema para gerar ideias."]
+        ideas = generate_ai_content(prompt, force_json=True)
+        if not isinstance(ideas, list) or len(ideas) == 0:
+            raise Exception("A IA não retornou uma lista de ideias.")
+        return jsonify({"ideas": ideas})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-def get_ai_rhymes(word, theme):
-    """Busca rimas fonéticas (lógica do seu rhyme_engine.py)."""
-    model = get_ai_model()
-    if model is None:
-        return [{"palavra": "Erro", "definicao": "Erro na configuração da IA."}]
+@app.route('/api/find-rhymes', methods=['POST'])
+def api_find_rhymes():
+    """
+    (BNCC - EF67LP31 - Recursos Sonoros)
+    Busca rimas com alta precisão fonética.
+    """
+    data = request.json
+    word = data.get('word')
+    theme = data.get('theme')
+    if not word:
+        return jsonify({"error": "Nenhuma palavra fornecida."}), 400
 
+    # PROMPT OTIMIZADO: Mantém a regra de precisão fonética (essencial), mas força JSON e melhora a definição.
     prompt = f"""
     Aja como um linguista computacional e poeta, especialista em fonética do português brasileiro.
     Sua tarefa é gerar uma lista de palavras que rimam com '{word}' para um aluno de 11 anos, com o tema '{theme}'.
@@ -121,30 +176,43 @@ def get_ai_rhymes(word, theme):
     - Evite palavras arcaicas ou complexas.
 
     **Formato da Resposta:**
-    Retorne uma lista de objetos JSON. Cada objeto deve ter "palavra" e "definicao" (curta e simples).
+    Retorne uma lista de objetos JSON. Cada objeto deve ter:
+    - "palavra": A palavra que rima.
+    - "definicao": Uma definição muito curta e simples (máximo 5 palavras).
     Retorne no mínimo 8 sugestões, se possível.
     """
     try:
-        generation_config = {"temperature": 0.8}
-        response = model.generate_content(prompt, generation_config=generation_config)
-        json_text = response.text.strip().replace("```json", "").replace("```", "").replace("python", "")
-        rhymes = json.loads(json_text)
-        rhymes = [r for r in rhymes if r['palavra'].lower() != word.lower()]
-        return rhymes if rhymes else [{"palavra": "Puxa!", "definicao": f"Não encontrei rimas para '{word}'."}]
-    except Exception:
-        return [{"palavra": "Erro", "definicao": "O Assistente teve um problema para buscar rimas."}]
+        rhymes = generate_ai_content(prompt, force_json=True)
+        if not isinstance(rhymes, list):
+            rhymes = []
+        
+        # Filtra a palavra original
+        rhymes = [r for r in rhymes if isinstance(r, dict) and r.get('palavra', '').lower() != word.lower()]
+        
+        if not rhymes:
+            rhymes = [{"palavra": "Puxa!", "definicao": f"Não encontrei rimas para '{word}'."}]
+            
+        return jsonify({"rhymes": rhymes})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-def get_ai_errors(text):
-    """Verifica ortografia (lógica do seu spell_checker.py)."""
-    model = get_ai_model()
-    if model is None:
-        return []
-    
+@app.route('/api/check-poem', methods=['POST'])
+def api_check_poem():
+    """
+    (BNCC - EF69LP51 - Revisão)
+    Verifica ortografia e uso básico de maiúsculas, ignorando pontuação.
+    """
+    data = request.json
+    text = data.get('text')
+    if not text:
+        return jsonify({"errors": []})
+
     lines = text.split('\n')
-    numbered_text = "\n".join(f"{i+1}: {line}" for i, line in enumerate(lines))
+    numbered_text = "\n".join(f"{i+1}: {line}" for i, line in enumerate(lines) if line.strip())
 
+    # PROMPT OTIMIZADO: Regras mais claras, foco em ignorar pontuação (liberdade poética).
     prompt = f"""
-    Aja como um professor de português experiente, revisando um poema de um aluno de 11 anos.
+    Aja como um professor de português experiente e compreensivo, revisando um poema de um aluno de 11 anos.
     O aluno pode usar liberdade poética.
 
     **Texto do poema (para Contexto):**
@@ -153,79 +221,48 @@ def get_ai_errors(text):
     ---
 
     **Regras de Correção:**
-    1.  **Foco:** Apenas ortografia (palavras erradas) e uso de maiúsculas.
-    2.  **Contexto é Rei:** As sugestões devem fazer sentido.
-    3.  **IGNORE A PONTUAÇÃO:** Poemas têm liberdade poética.
-    4.  **MÚLTIPLAS SUGESTÕES:** Ofereça até 3 correções.
-    5.  **Comentários Simples:** Forneça um "motivo" (reason) curto.
+    1.  **FOCO:** Apenas erros claros de ORTOGRAFIA (ex: 'caza' -> 'casa') e uso de MAIÚSCULAS em início de verso (se o aluno estiver tentando, mas errando).
+    2.  **IGNORAR TOTALMENTE:** Não corrija pontuação (vírgulas, pontos), gírias ou separação de versos. ISSO É LIBERDADE POÉTICA.
+    3.  **MÚLTIPLAS SUGESTÕES:** Ofereça até 2 correções prováveis.
+    4.  **COMENTÁRIO:** Forneça um "motivo" (reason) muito curto e gentil.
 
     **Formato OBRIGATÓRIO da Resposta (JSON):**
     Retorne uma lista de objetos. Cada objeto deve ter:
-    - "original": A palavra com problema.
-    - "suggestions": UMA LISTA de strings (ex: ["tem", "tenho"]).
-    - "reason": Uma única string com o motivo.
+    - "original": A palavra com problema (ex: "comeSou").
+    - "suggestions": UMA LISTA de strings (ex: ["começou"]).
+    - "reason": Uma única string com o motivo (ex: "Palavra escrita com 's' no lugar de 'ç'").
     - "verse_number": O número da linha (começando em 1).
     
     Se não houver erros, retorne uma lista vazia [].
     """
     try:
-        response = model.generate_content(prompt)
-        json_text = response.text.strip().replace("```json", "").replace("```", "").replace("python", "")
-        if not json_text or "[]" in json_text:
-            return []
-        return json.loads(json_text)
-    except Exception:
-        return []
+        errors = generate_ai_content(prompt, force_json=True)
+        if not isinstance(errors, list):
+            errors = []
+        return jsonify({"errors": errors})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-# --- 3. LÓGICA DE GERAÇÃO DE PDF (Adaptada do seu pdf_generator.py) ---
 
-def generate_pdf_style_ai(theme, poem_text):
-    """Gera um estilo de design para o PDF, incluindo um estilo de borda."""
-    model = get_ai_model()
-    if model is None: 
-        return {
-            "font": "Helvetica", "bg_color_hex": "#F0F8FF", 
-            "text_color_hex": "#2F4F4F", "title_color_hex": "#FF6347",
-            "border_style": "simples", "border_color_hex": "#4682B4"
-        }
-
-    prompt = f"""
-    Aja como um diretor de arte criando um layout para um poema infantil (11 anos).
-    O tema é "{theme}".
-
-    Sua tarefa é retornar um objeto JSON com uma paleta de design lúdica e moderna.
-
-    **Chaves obrigatórias no JSON:**
-    - "font": Escolha uma entre "Courier", "Helvetica", "Times".
-    - "bg_color_hex": Uma cor de fundo suave em hexadecimal (ex: "#F0F8FF").
-    - "text_color_hex": Uma cor de texto escura e legível, em hexadecimal.
-    - "title_color_hex": Uma cor de destaque para o título, em hexadecimal.
-    - "border_style": Escolha UM: "simples", "dupla", "ondas", "estrelas".
-    - "border_color_hex": Uma cor para a borda, em hexadecimal.
-
-    Retorne APENAS o objeto JSON.
-    """
-    try:
-        response = model.generate_content(prompt)
-        json_text = response.text.strip().replace("```json", "").replace("```", "").replace("python", "")
-        return json.loads(json_text)
-    except Exception:
-        # Estilo padrão em caso de falha
-        return {
-            "font": "Helvetica", "bg_color_hex": "#F0F8FF", 
-            "text_color_hex": "#2F4F4F", "title_color_hex": "#FF6347",
-            "border_style": "simples", "border_color_hex": "#4682B4"
-        }
+# --- 3. LÓGICA DE GERAÇÃO DE PDF (fpdf2) ---
 
 class PoemPDF(FPDF):
+    """Classe customizada do FPDF para gerar o PDF com bordas e estilos da IA."""
     def __init__(self, style_guide, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.style = style_guide
         # Converte cores hex para RGB
-        self.bg_r, self.bg_g, self.bg_b = tuple(int(self.style['bg_color_hex'].lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-        self.text_r, self.text_g, self.text_b = tuple(int(self.style['text_color_hex'].lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-        self.title_r, self.title_g, self.title_b = tuple(int(self.style['title_color_hex'].lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-        self.border_r, self.border_g, self.border_b = tuple(int(self.style.get('border_color_hex', '#4682B4').lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+        try:
+            self.bg_r, self.bg_g, self.bg_b = tuple(int(self.style.get('bg_color_hex', '#FFFFFF').lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+            self.text_r, self.text_g, self.text_b = tuple(int(self.style.get('text_color_hex', '#000000').lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+            self.title_r, self.title_g, self.title_b = tuple(int(self.style.get('title_color_hex', '#000000').lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+            self.border_r, self.border_g, self.border_b = tuple(int(self.style.get('border_color_hex', '#4682B4').lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+        except Exception as e:
+            print(f"Erro ao converter cores HEX: {e}. Usando padrões.")
+            self.bg_r, self.bg_g, self.bg_b = (240, 248, 255) # AliceBlue
+            self.text_r, self.text_g, self.text_b = (47, 79, 79)     # DarkSlateGray
+            self.title_r, self.title_g, self.title_b = (255, 99, 71)   # Tomato
+            self.border_r, self.border_g, self.border_b = (70, 130, 180)  # SteelBlue
 
     def header(self):
         self.set_fill_color(self.bg_r, self.bg_g, self.bg_b)
@@ -236,10 +273,9 @@ class PoemPDF(FPDF):
         self.set_y(-15)
         self.set_font('Helvetica', 'I', 8)
         self.set_text_color(128)
-        self.cell(0, 10, f'Gerado pela Oficina de Rimas - {datetime.now().strftime("%d/%m/%Y")}', 0, 0, 'C')
+        self.cell(0, 10, f'Gerado pela Oficina de Poemas - {datetime.now().strftime("%d/%m/%Y")}', 0, 0, 'C')
 
     def draw_border(self):
-        """Chama a função de desenho de borda apropriada com base no estilo."""
         style = self.style.get('border_style', 'simples')
         self.set_draw_color(self.border_r, self.border_g, self.border_b)
         
@@ -277,64 +313,120 @@ class PoemPDF(FPDF):
         for i in range(5):
             angle = i * 2 * 3.14159 / 5 - 3.14159 / 2
             radius = size if i % 2 == 0 else size / 2.5
-            p.append((x + radius *_cos(angle), y + radius * _sin(angle)))
+            p.append((x + radius * _cos(angle), y + radius * _sin(angle)))
         self.polygon(p, 'F')
 
-def create_poem_pdf(title, author, poem_text, style_guide):
-    """Cria e retorna o PDF como bytes."""
-    pdf = PoemPDF(style_guide)
-    pdf.add_page()
-    
-    pdf.set_font(style_guide['font'], 'B', 24)
-    pdf.set_text_color(pdf.title_r, pdf.title_g, pdf.title_b)
-    pdf.multi_cell(0, 15, title, align='C')
-    pdf.ln(20)
-    
-    pdf.set_font(style_guide['font'], '', 12)
-    pdf.set_text_color(pdf.text_r, pdf.text_g, pdf.text_b)
-    pdf.multi_cell(0, 10, poem_text)
-    pdf.ln(10)
-    
-    pdf.set_font(style_guide['font'], 'I', 14)
-    pdf.multi_cell(0, 10, f'- {author}', align='R')
-    
-    # Retorna como bytes, pronto para ser enviado pela API
-    return pdf.output(dest='S').encode('latin-1')
+@app.route('/api/generate-pdf', methods=['POST'])
+def api_generate_pdf():
+    """Gera o PDF estilizado e o retorna como um arquivo."""
+    data = request.json
+    required_fields = ['title', 'author', 'text', 'theme']
+    if not all(field in data for field in required_fields):
+        return jsonify({"error": "Dados incompletos para PDF"}), 400
+
+    try:
+        # PROMPT OTIMIZADO: Mais restrito para garantir saída JSON válida.
+        style_prompt = f"""
+        Aja como um designer gráfico. O tema do poema é "{data['theme']}".
+        Retorne um objeto JSON com uma paleta de design lúdica.
+
+        **Chaves obrigatórias no JSON:**
+        - "font": Escolha UMA: "Courier", "Helvetica", "Times".
+        - "bg_color_hex": Cor de fundo suave (ex: "#F0F8FF").
+        - "text_color_hex": Cor de texto escura e legível (ex: "#333333").
+        - "title_color_hex": Cor de destaque para o título (ex: "#FF6347").
+        - "border_style": Escolha UM: "simples", "dupla", "ondas", "estrelas".
+        - "border_color_hex": Cor para a borda (ex: "#4682B4").
+        """
+        
+        try:
+            style = generate_ai_content(style_prompt, force_json=True)
+            if not isinstance(style, dict):
+                raise Exception("Estilo retornado não é um dicionário.")
+        except Exception as e:
+            print(f"Falha ao gerar estilo de IA, usando padrão. Erro: {e}")
+            style = {
+                "font": "Helvetica", "bg_color_hex": "#F0F8FF", 
+                "text_color_hex": "#2F4F4F", "title_color_hex": "#FF6347",
+                "border_style": "simples", "border_color_hex": "#4682B4"
+            }
+
+        # Gera o PDF em memória
+        pdf = PoemPDF(style)
+        pdf.add_page()
+        
+        # Adiciona Título
+        pdf.set_font(style.get('font', 'Helvetica'), 'B', 24)
+        pdf.set_text_color(pdf.title_r, pdf.title_g, pdf.title_b)
+        pdf.multi_cell(0, 15, data['title'], align='C')
+        pdf.ln(20)
+        
+        # Adiciona Poema
+        pdf.set_font(style.get('font', 'Helvetica'), '', 12)
+        pdf.set_text_color(pdf.text_r, pdf.text_g, pdf.text_b)
+        # Corrige encoding para FPDF (latin-1)
+        poem_text_encoded = data['text'].encode('latin-1', 'replace').decode('latin-1')
+        pdf.multi_cell(0, 10, poem_text_encoded)
+        pdf.ln(10)
+        
+        # Adiciona Autor
+        pdf.set_font(style.get('font', 'Helvetica'), 'I', 14)
+        author_encoded = data['author'].encode('latin-1', 'replace').decode('latin-1')
+        pdf.multi_cell(0, 10, f'- {author_encoded}', align='R')
+        
+        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        
+        # Retorna o PDF como um arquivo para download
+        safe_filename = re.sub(r'[^a-z0-9]', '_', data['title'].lower(), re.IGNORECASE) or 'poema'
+        
+        return Response(
+            pdf_bytes,
+            mimetype="application/pdf",
+            headers={"Content-disposition": f"attachment; filename={safe_filename}.pdf"}
+        )
+        
+    except Exception as e:
+        print(f"Erro ao gerar PDF: {e}")
+        return jsonify({"error": f"Erro interno ao gerar PDF: {e}"}), 500
 
 
 # --- 4. TEMPLATE DO FRONTEND (HTML/CSS/JS) ---
 
-# Este é o frontend completo embutido em uma string Python.
-# Ele usa TailwindCSS para um design moderno e acessível (DUA).
+# Frontend completo embutido em uma string Python.
+# Usa TailwindCSS para um design moderno e acessível (DUA).
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oficina de Poemas - Python</title>
+    <title>Oficina de Poemas - Python (Flask)</title>
     <!-- Carrega TailwindCSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Carrega a fonte (Roboto) -->
+    <!-- Carrega Fontes (Lúdica + Padrão) -->
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Playpen+Sans:wght@400;600&display=swap" rel="stylesheet">
     <style>
         /* Estilos customizados (DUA/Lúdico) */
         body {
             font-family: 'Roboto', sans-serif;
-            background-color: #f0f4f8; /* Fundo suave */
+            background-color: #f0f4f8; /* Fundo suave (slate-100) */
             color: #1e293b; /* Texto principal (slate-800) */
         }
         /* Fonte lúdica para títulos */
         .font-playful {
             font-family: 'Playpen Sans', cursive;
         }
-        /* Botão principal */
+        /* Botão principal (DUA - Chama a atenção) */
         .btn-primary {
-            @apply bg-indigo-600 text-white font-bold py-3 px-6 rounded-full shadow-lg transition-transform transform hover:scale-105 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50;
+            @apply bg-indigo-600 text-white font-bold py-3 px-6 rounded-full shadow-lg transition-transform transform hover:scale-105 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50 disabled:bg-indigo-300;
         }
         /* Botão secundário */
         .btn-secondary {
-            @apply bg-slate-200 text-slate-700 font-semibold py-2 px-4 rounded-full shadow-sm transition-colors hover:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-400;
+            @apply bg-slate-200 text-slate-700 font-semibold py-2 px-4 rounded-full shadow-sm transition-colors hover:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:bg-slate-100;
+        }
+        /* Botão de correção (DUA - Feedback) */
+        .btn-correction {
+             @apply bg-emerald-100 text-emerald-800 font-medium py-1 px-3 rounded-full text-sm transition-colors hover:bg-emerald-200 focus:outline-none focus:ring-2 focus:ring-emerald-400;
         }
         /* Card (DUA - separação de conteúdo) */
         .card {
@@ -350,7 +442,7 @@ HTML_TEMPLATE = """
         ::-webkit-scrollbar-thumb { background: #6366f1; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #4f46e5; }
         
-        /* Spinner de carregamento */
+        /* Spinner de carregamento (dentro do overlay) */
         .loader {
             width: 48px; height: 48px;
             border: 5px solid #FFF;
@@ -361,19 +453,32 @@ HTML_TEMPLATE = """
             animation: rotation 1s linear infinite;
         }
         @keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        /* Overlay de carregamento */
+        
+        /* Overlay de carregamento (DUA - Feedback de processo) */
         #loading-overlay {
-            @apply fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden;
+            @apply fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300;
+        }
+        .loading-hidden {
+            @apply opacity-0 pointer-events-none;
+        }
+        
+        /* Efeito de fade-in para as etapas */
+        .stage {
+            animation: fadeIn 0.5s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4">
 
-    <!-- Container principal da aplicação (sem rolagem no body) -->
+    <!-- Container principal da aplicação (evita rolagem no body) -->
     <div class="w-full max-w-7xl mx-auto h-[95vh] flex flex-col">
     
         <!-- ETAPA 1: Interesses (DUA - Recrutar Interesse) -->
-        <div id="stage-interest" class="card w-full max-w-2xl mx-auto my-auto text-center animate-fade-in">
+        <div id="stage-interest" class="card w-full max-w-2xl mx-auto my-auto text-center stage">
             <h1 class="text-4xl font-playful font-bold text-indigo-600 mb-4">Vamos Criar um Poema! 🚀</h1>
             <p class="text-lg text-slate-600 mb-6">Para começar, me conte do que você mais gosta. Pode ser um jogo, um animal, um lugar, ou um sentimento!</p>
             <textarea id="interest-input" class="w-full h-32 p-4 border border-slate-300 rounded-lg text-lg focus:ring-2 focus:ring-indigo-500" placeholder="Ex: Gosto de jogar futebol no parque, do meu cachorro e de olhar as estrelas..."></textarea>
@@ -384,7 +489,7 @@ HTML_TEMPLATE = """
         </div>
 
         <!-- ETAPA 2: Escolha do Tema -->
-        <div id="stage-theme" class="card w-full max-w-3xl mx-auto my-auto text-center hidden">
+        <div id="stage-theme" class="card w-full max-w-3xl mx-auto my-auto text-center stage hidden">
             <h1 class="text-4xl font-playful font-bold text-indigo-600 mb-4">Ótimas Ideias! ✨</h1>
             <p class="text-lg text-slate-600 mb-8">Pensei nestes temas com base no que você escreveu. Escolha um para começar:</p>
             <div id="theme-buttons" class="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -394,7 +499,7 @@ HTML_TEMPLATE = """
         </div>
 
         <!-- ETAPA 3: Oficina de Escrita (Layout principal) -->
-        <div id="stage-writing" class="flex-1 h-full hidden flex-col md:flex-row gap-6">
+        <div id="stage-writing" class="flex-1 h-full hidden flex-col md:flex-row gap-6 stage">
             
             <!-- Coluna Principal: Editor e Correções -->
             <main class="flex-[3] flex flex-col gap-6 h-full">
@@ -415,7 +520,7 @@ HTML_TEMPLATE = """
                     <button id="btn-finish-poem" class="btn-primary flex-1">Concluir Poema 🏁</button>
                 </div>
                 
-                <!-- Container de Correções (DUA - Feedback) -->
+                <!-- Container de Correções (DUA - Feedback Construtivo) -->
                 <div id="corrections-container" class="card flex-shrink-0 hidden max-h-[300px] overflow-y-auto">
                     <h3 class="text-xl font-bold mb-4 text-slate-700">Dicas do Assistente</h3>
                     <div id="corrections-list">
@@ -434,7 +539,7 @@ HTML_TEMPLATE = """
                         <button id="btn-get-rhymes" class="btn-secondary px-4">Buscar</button>
                     </div>
                     <div id="rhyme-results" class="mt-4 max-h-40 overflow-y-auto text-sm">
-                        <!-- Rimas serão inseridas aqui -->
+                        <p class="text-slate-400 italic">Digite uma palavra e clique em "Buscar" para ver as rimas.</p>
                     </div>
                 </div>
 
@@ -465,7 +570,7 @@ HTML_TEMPLATE = """
         </div>
         
         <!-- ETAPA 4: Finalização e PDF -->
-        <div id="stage-pdf" class="card w-full max-w-lg mx-auto my-auto text-center hidden">
+        <div id="stage-pdf" class="card w-full max-w-lg mx-auto my-auto text-center stage hidden">
             <h1 class="text-4xl font-playful font-bold text-indigo-600 mb-4">Seu Poema está Lindo! 🏆</h1>
             <p class="text-lg text-slate-600 mb-6">Vamos dar os toques finais para criar seu PDF personalizado.</p>
             <div class="space-y-4">
@@ -481,7 +586,7 @@ HTML_TEMPLATE = """
     </div>
 
     <!-- Overlay de Carregamento Global -->
-    <div id="loading-overlay">
+    <div id="loading-overlay" class="loading-hidden">
         <div class="loader"></div>
     </div>
 
@@ -489,7 +594,7 @@ HTML_TEMPLATE = """
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             // --- Variáveis de Estado e Elementos ---
-            let appState = {
+            const appState = {
                 chosenTheme: '',
                 poemText: '',
                 currentErrors: []
@@ -503,12 +608,14 @@ HTML_TEMPLATE = """
             };
 
             const loadingOverlay = document.getElementById('loading-overlay');
+            const allButtons = document.querySelectorAll('button');
 
-            // --- Funções de Navegação e UI ---
+            // --- Funções de UI (Navegação e Carregamento) ---
             function showStage(stageId) {
                 Object.values(stages).forEach(stage => stage.classList.add('hidden'));
                 if (stages[stageId]) {
                     stages[stageId].classList.remove('hidden');
+                    stages[stageId].classList.add('stage'); // Adiciona classe para animação
                     // Garante que o layout flex seja aplicado corretamente
                     if (stageId === 'writing') {
                         stages[stageId].classList.add('flex');
@@ -519,10 +626,17 @@ HTML_TEMPLATE = """
             }
 
             function showLoading(show) {
-                loadingOverlay.classList.toggle('hidden', !show);
+                loadingOverlay.classList.toggle('loading-hidden', !show);
+                allButtons.forEach(btn => btn.disabled = show);
+            }
+            
+            function showToast(message, isError = false) {
+                // (Em um app maior, usaríamos uma biblioteca de toast)
+                alert(message);
+                if(isError) console.error(message);
             }
 
-            // --- Função de API Helper ---
+            // --- Função de API Helper (Otimizada) ---
             async function fetchAPI(endpoint, body) {
                 showLoading(true);
                 try {
@@ -531,18 +645,25 @@ HTML_TEMPLATE = """
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(body)
                     });
-                    if (!response.ok) {
-                        throw new Error(`Erro na API: ${response.statusText}`);
-                    }
-                    // Verifica se a resposta é JSON ou um arquivo (PDF)
+                    
                     const contentType = response.headers.get("content-type");
+                    
+                    // Caso 1: Download de PDF
                     if (contentType && contentType.includes("application/pdf")) {
+                        if (!response.ok) throw new Error('Falha ao gerar o PDF.');
                         return await response.blob();
                     }
-                    return await response.json();
+                    
+                    // Caso 2: Resposta JSON
+                    const data = await response.json();
+                    if (!response.ok) {
+                        throw new Error(data.error || `Erro na API: ${response.statusText}`);
+                    }
+                    return data;
+
                 } catch (error) {
                     console.error('Erro no fetchAPI:', error);
-                    alert(`Ocorreu um erro ao conectar com o assistente: ${error.message}`);
+                    showToast(`Ocorreu um erro ao conectar com o assistente: ${error.message}`, true);
                     return null;
                 } finally {
                     showLoading(false);
@@ -560,14 +681,15 @@ HTML_TEMPLATE = """
                 }
                 interestError.classList.add('hidden');
                 
-                const data = await fetchAPI('/api/themes', { interest });
+                const data = await fetchAPI('/api/generate-themes', { interest });
                 if (data && data.themes) {
                     const themeButtons = document.getElementById('theme-buttons');
                     themeButtons.innerHTML = ''; // Limpa temas antigos
                     data.themes.forEach(theme => {
                         const button = document.createElement('button');
                         button.textContent = theme;
-                        button.className = 'btn-secondary text-base md:text-lg p-4 h-24';
+                        button.className = 'btn-secondary text-base md:text-lg p-4 h-24 truncate';
+                        button.title = theme;
                         button.onclick = () => handleThemeChoice(theme);
                         themeButtons.appendChild(button);
                     });
@@ -582,7 +704,7 @@ HTML_TEMPLATE = """
                 appState.chosenTheme = theme;
                 document.getElementById('chosen-theme-title').textContent = theme;
                 
-                const data = await fetchAPI('/api/ideas', { theme });
+                const data = await fetchAPI('/api/generate-ideas', { theme });
                 if (data && data.ideas) {
                     const ideasList = document.getElementById('ideas-list');
                     ideasList.innerHTML = ''; // Limpa ideias antigas
@@ -621,9 +743,11 @@ HTML_TEMPLATE = """
                 const word = rhymeInput.value.trim();
                 if (!word) return;
                 
-                const data = await fetchAPI('/api/rhymes', { word, theme: appState.chosenTheme });
+                rhymeResults.innerHTML = '<p class="text-slate-400 italic">Buscando...</p>';
+                const data = await fetchAPI('/api/find-rhymes', { word, theme: appState.chosenTheme });
+                
+                rhymeResults.innerHTML = ''; // Limpa
                 if (data && data.rhymes) {
-                    rhymeResults.innerHTML = '';
                     if (data.rhymes[0].palavra === "Erro" || data.rhymes[0].palavra === "Puxa!") {
                         rhymeResults.innerHTML = `<p class="text-slate-500">${data.rhymes[0].definicao}</p>`;
                     } else {
@@ -636,6 +760,8 @@ HTML_TEMPLATE = """
                         });
                         rhymeResults.appendChild(list);
                     }
+                } else {
+                    rhymeResults.innerHTML = '<p class="text-red-500">Falha ao buscar rimas.</p>';
                 }
             });
 
@@ -643,7 +769,7 @@ HTML_TEMPLATE = """
             document.getElementById('btn-check-spelling').addEventListener('click', async () => {
                 if (!appState.poemText) return;
                 
-                const data = await fetchAPI('/api/check', { text: appState.poemText });
+                const data = await fetchAPI('/api/check-poem', { text: appState.poemText });
                 if (data) {
                     appState.currentErrors = data.errors || [];
                     renderCorrections();
@@ -654,15 +780,13 @@ HTML_TEMPLATE = """
                 correctionsList.innerHTML = '';
                 if (appState.currentErrors.length === 0) {
                     correctionsContainer.classList.add('hidden');
-                    alert("Nenhum problema de ortografia encontrado! 🎉");
+                    showToast("Nenhum problema de ortografia encontrado! 🎉");
                     return;
                 }
                 
                 const errorsByVerse = {};
                 appState.currentErrors.forEach(err => {
-                    if (!errorsByVerse[err.verse_number]) {
-                        errorsByVerse[err.verse_number] = [];
-                    }
+                    if (!errorsByVerse[err.verse_number]) errorsByVerse[err.verse_number] = [];
                     errorsByVerse[err.verse_number].push(err);
                 });
 
@@ -674,7 +798,7 @@ HTML_TEMPLATE = """
                     errorsByVerse[verseNum].forEach(error => {
                         const errorDiv = document.createElement('div');
                         errorDiv.className = 'ml-4 mt-2';
-                        errorDiv.innerHTML = `<p>Problema: <strong class="text-red-600">${error.original}</strong></p>
+                        errorDiv.innerHTML = `<p>Você escreveu <strong class="text-red-600 line-through">${error.original}</strong></p>
                                             <p class="text-sm text-slate-500 italic mb-2">${error.reason}</p>`;
                         
                         const buttonsDiv = document.createElement('div');
@@ -682,7 +806,7 @@ HTML_TEMPLATE = """
                         error.suggestions.forEach(suggestion => {
                             const button = document.createElement('button');
                             button.textContent = suggestion;
-                            button.className = 'btn-secondary text-sm';
+                            button.className = 'btn-correction';
                             button.onclick = () => applyCorrection(error.original, suggestion, error.verse_number);
                             buttonsDiv.appendChild(button);
                         });
@@ -701,7 +825,7 @@ HTML_TEMPLATE = """
                 const lineIndex = verseNum - 1;
 
                 if (lines[lineIndex]) {
-                    // Substitui apenas a primeira ocorrência na linha correta
+                    // Substitui apenas a primeira ocorrência na linha correta, mantendo o caso
                     const regex = new RegExp(`\\b${original}\\b`, 'i');
                     if (regex.test(lines[lineIndex])) {
                          lines[lineIndex] = lines[lineIndex].replace(regex, suggestion);
@@ -711,14 +835,19 @@ HTML_TEMPLATE = """
                 poemEditor.value = lines.join('\\n');
                 poemEditor.dispatchEvent(new Event('input')); // Atualiza estatísticas
 
-                // Re-valida
-                document.getElementById('btn-check-spelling').click();
+                // Remove o erro corrigido do estado
+                appState.currentErrors = appState.currentErrors.filter(err => 
+                    !(err.original === original && err.verse_number == verseNum)
+                );
+                
+                // Re-renderiza a lista de correções
+                renderCorrections();
             }
 
             // Concluir Poema
             document.getElementById('btn-finish-poem').addEventListener('click', () => {
                 if (appState.poemText.trim().length < 10) {
-                    alert("Seu poema parece um pouco curto. Escreva mais um pouco!");
+                    showToast("Seu poema parece um pouco curto. Escreva mais um pouco!");
                     return;
                 }
                 showStage('pdf');
@@ -741,7 +870,7 @@ HTML_TEMPLATE = """
                 }
                 pdfError.classList.add('hidden');
                 
-                const blob = await fetchAPI('/api/pdf', {
+                const blob = await fetchAPI('/api/generate-pdf', {
                     title,
                     author,
                     text: appState.poemText,
@@ -754,7 +883,6 @@ HTML_TEMPLATE = """
                     const a = document.createElement('a');
                     a.style.display = 'none';
                     a.href = url;
-                    // Limpa o nome do arquivo
                     const safeFilename = title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
                     a.download = `${safeFilename || 'meu_poema'}.pdf`;
                     document.body.appendChild(a);
@@ -765,101 +893,25 @@ HTML_TEMPLATE = """
             });
 
             // --- Inicialização ---
+            showLoading(false); // Garante que o loading esteja oculto
             showStage('interest');
-            // showStage('writing'); // Para debug
-            // appState.chosenTheme = "Teste";
-            // document.getElementById('chosen-theme-title').textContent = "Teste";
         });
     </script>
 </body>
 </html>
 """
 
-# --- 5. DEFINIÇÃO DAS ROTAS DO FLASK ---
+# --- 5. ROTA PRINCIPAL DO FLASK ---
 
 @app.route('/')
 def home():
-    """Serve o frontend principal."""
+    """Serve o frontend principal (HTML/CSS/JS)."""
     return render_template_string(HTML_TEMPLATE)
-
-@app.route('/api/themes', methods=['POST'])
-def api_themes():
-    """Endpoint da API para gerar temas."""
-    data = request.json
-    if 'interest' not in data:
-        return jsonify({"error": "Interesse não fornecido"}), 400
-    
-    themes = get_ai_themes(data['interest'])
-    return jsonify({"themes": themes})
-
-@app.route('/api/ideas', methods=['POST'])
-def api_ideas():
-    """Endpoint da API para gerar ideias de progressão."""
-    data = request.json
-    if 'theme' not in data:
-        return jsonify({"error": "Tema não fornecido"}), 400
-    
-    ideas = get_ai_ideas(data['theme'])
-    return jsonify({"ideas": ideas})
-
-@app.route('/api/rhymes', methods=['POST'])
-def api_rhymes():
-    """Endpoint da API para buscar rimas."""
-    data = request.json
-    if 'word' not in data or 'theme' not in data:
-        return jsonify({"error": "Dados incompletos"}), 400
-    
-    rhymes = get_ai_rhymes(data['word'], data['theme'])
-    return jsonify({"rhymes": rhymes})
-
-@app.route('/api/check', methods=['POST'])
-def api_check():
-    """Endpoint da API para verificar ortografia."""
-    data = request.json
-    if 'text' not in data:
-        return jsonify({"error": "Texto não fornecido"}), 400
-    
-    errors = get_ai_errors(data['text'])
-    return jsonify({"errors": errors})
-
-@app.route('/api/pdf', methods=['POST'])
-def api_pdf():
-    """Endpoint da API para gerar e retornar o PDF."""
-    data = request.json
-    required_fields = ['title', 'author', 'text', 'theme']
-    if not all(field in data for field in required_fields):
-        return jsonify({"error": "Dados incompletos para PDF"}), 400
-
-    try:
-        # 1. Pede à IA um estilo
-        style = generate_pdf_style_ai(data['theme'], data['text'])
-        if not style:
-            raise Exception("Falha ao gerar estilo de IA")
-
-        # 2. Gera o PDF em memória
-        pdf_bytes = create_poem_pdf(
-            data['title'], 
-            data['author'], 
-            data['text'], 
-            style
-        )
-        
-        # 3. Retorna o PDF como um arquivo para download
-        safe_filename = re.sub(r'[^a-z0-9]', '_', data['title'].lower(), re.IGNORECASE) or 'poema'
-        
-        return Response(
-            pdf_bytes,
-            mimetype="application/pdf",
-            headers={"Content-disposition": f"attachment; filename={safe_filename}.pdf"}
-        )
-        
-    except Exception as e:
-        print(f"Erro ao gerar PDF: {e}")
-        return jsonify({"error": f"Erro interno ao gerar PDF: {e}"}), 500
 
 # --- 6. INICIALIZAÇÃO DA APLICAÇÃO ---
 
 if __name__ == '__main__':
+    # Verifica a chave de API na inicialização
     if not API_KEY:
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         print("!! AVISO: A GOOGLE_API_KEY não está configurada.         !!")
@@ -867,6 +919,9 @@ if __name__ == '__main__':
         print("!! funcionar. (ex: export GOOGLE_API_KEY='sua_chave')   !!")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
     
-    # Busca a porta na variável de ambiente (comum em produção) ou usa 5000
+    # Configura a porta para produção (Render) ou 5000 para desenvolvimento
     port = int(os.environ.get("PORT", 5000))
+    # 'debug=True' é ótimo para desenvolvimento, mas deve ser 'False' em produção.
+    # O Render gerencia isso. 'host=0.0.0.0' é necessário para o Render.
     app.run(debug=True, host='0.0.0.0', port=port)
+
