@@ -17,15 +17,40 @@ app = Flask(__name__)
 API_KEY = os.environ.get('GOOGLE_API_KEY')
 model = None
 
-def configure_ai_model():
+def get_model():
     """Configura e retorna o modelo de IA. Lida com erros de chave."""
     global model
     if model:
         return model
     
     if not API_KEY:
-        print("ERRO CRÍTICO: Variável de ambiente GOOGLE_API_KEY não encontrada.")
+        print("!! ERRO FATAL: GOOGLE_API_KEY não encontrada no ambiente. !!")
         return None
+    
+    try:
+        genai.configure(api_key=API_KEY)
+        # Usando o 'gemini-1.5-flash-latest' - sua NOVA chave DEVE ter acesso a ele.
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        print("Modelo 'gemini-1.5-flash-latest' configurado com sucesso.")
+        return model
+    except Exception as e:
+        print(f"Erro ao configurar o modelo Gemini: {e}")
+        # Tenta o modelo 'gemini-pro' como fallback
+        try:
+            print("Tentando fallback para 'gemini-pro'...")
+            model = genai.GenerativeModel('gemini-pro')
+            print("Modelo 'gemini-pro' configurado com sucesso.")
+            return model
+        except Exception as e2:
+            print(f"Erro ao configurar 'gemini-pro' também: {e2}")
+            return None
+
+def generate_ai_content(prompt_text, force_json=False):
+    """Função central para chamadas de IA, com retry e parsing de JSON."""
+    model = get_model() # <- Corrigido para chamar a função correta
+    if model is None:
+        raise Exception("Modelo de IA não inicializado. Verifique a API Key e as permissões no Google Cloud.")
+
     try:
         genai.configure(api_key=API_KEY)
         # Usando o 'gemini-1.5-flash-latest' - sua NOVA chave terá acesso a ele.
@@ -112,40 +137,55 @@ def api_generate_themes():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/generate-ideas', methods=['POST'])
-def api_generate_ideas():
+@app.route('/api/get-feedback', methods=['POST'])
+def api_get_feedback():
     """
-    (DUA - Sustentar Esforço / BNCC - EF67LP31)
-    Gera ideias de progressão focadas em recursos semânticos e sensoriais.
+    (DUA - Feedback / BNCC - EF67LP31)
+    Dá feedback interativo e semântico sobre o poema em progresso.
+    Esta é a principal função "conversacional".
     """
     data = request.json
-    theme = data.get('theme', 'um dia de chuva')
+    theme = data.get('theme')
+    text = data.get('text')
 
-    # PROMPT OTIMIZADO: Foco direto na BNCC (EF67LP31 - recursos semânticos/sonoros) e DUA (foco nos sentidos).
+    if not text:
+        return jsonify({"feedback": "Comece a escrever seu poema e depois clique aqui para pedir uma dica!"})
+
+    # PROMPT OTIMIZADO: O novo prompt "conversacional".
     prompt = f"""
-    Aja como um tutor de escrita criativa para um aluno do 6º ano.
-    O tema do poema é: "{theme}".
+    Aja como um tutor de escrita criativa (Professor Silva), amigável, encorajador e especialista em alunos do 6º ano.
+    O tema do poema do aluno é: "{theme}".
+    O rascunho atual do poema é:
+    ---
+    {text}
+    ---
 
-    Sua tarefa é gerar 8 perguntas ou comandos criativos para ajudar o aluno a desenvolver o poema.
-    As perguntas devem focar nos 5 SENTIDOS e em RECURSOS SEMÂNTICOS (comparações, metáforas simples).
+    Sua tarefa é CONVERSAR com o aluno, dando UMA ÚNICA dica específica e gentil para ajudá-lo a escrever a PRÓXIMA parte.
 
-    REGRAS:
-    1.  NÃO escreva versos, apenas perguntas/comandos.
-    2.  Use linguagem acessível (11-13 anos).
-    3.  Seja específico e sensorial.
-    4.  Retorne uma lista de strings.
+    REGRAS OBRIGATÓRIAS:
+    1.  **UMA SÓ DICA:** Dê apenas UMA sugestão por vez (semântica, sensorial ou rítmica).
+    2.  **FOCO NA PRÓXIMA AÇÃO:** Sua dica deve ser algo que o aluno possa aplicar AGORA.
+    3.  **PEDAGÓGICO (BNCC/DUA):** Incentive o uso dos sentidos (cheiros, sons, cores) ou recursos semânticos (comparações, metáforas simples).
+    4.  **TOM:** Seja gentil e encorajador. Comece elogiando algo (ex: "Que ótimo começo!", "Adorei essa linha!").
+    5.  **NÃO CORRIJA ORTOGRAFIA:** O botão "Revisar" faz isso. Foque na criatividade.
+    6.  **SEJA CURTO:** Máximo de 2-3 frases.
+    7.  **FALE COMO "Professor Silva":** Use a primeira pessoa (ex: "Eu notei...", "Que tal se você tentasse...").
 
-    Exemplos de perguntas boas:
-    - "Que cheiro o tema '{theme}' tem?"
-    - "Se '{theme}' fosse um som, como ele seria?"
-    - "Tente descrever '{theme}' usando uma comparação (ex: 'é como...')."
-    - "Que cores você vê quando pensa em '{theme}'?"
+    Exemplos de Boas Respostas:
+    - "Uau, adorei a linha '{text.split('\n')[-1] if text else '...'}'. Para a próxima estrofe, que tal tentar descrever o *som* que o '{theme}' faz?"
+    - "Está ficando ótimo! Notei que você usou a palavra 'grande'. Que tal tentarmos uma comparação? Por exemplo, 'grande como o quê?'"
+    - "Excelente! Você descreveu o que vê. Agora, como você se *sente* sobre '{theme}'? Tente escrever um verso sobre isso."
+    
+    Formato da Resposta OBRIGATÓRIO (JSON):
+    {{
+        "feedback": "Sua resposta em 2-3 frases aqui."
+    }}
     """
     try:
-        ideas = generate_ai_content(prompt, force_json=True)
-        if not isinstance(ideas, list) or len(ideas) == 0:
-            raise Exception("A IA não retornou uma lista de ideias.")
-        return jsonify({"ideas": ideas})
+        response_json = generate_ai_content(prompt, force_json=True)
+        if not isinstance(response_json, dict) or 'feedback' not in response_json:
+            raise Exception("A IA não retornou um feedback válido.")
+        return jsonify(response_json)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -543,12 +583,13 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
-                <!-- Inspiração (DUA - Guiar) -->
+                <!-- Tutor Interativo (DUA - Feedback) -->
                 <div class="card">
-                    <h3 class="text-xl font-bold mb-4 text-slate-700">💡 Inspiração Criativa</h3>
-                    <ul id="ideas-list" class="list-disc list-inside space-y-2 text-slate-600 max-h-48 overflow-y-auto">
-                        <!-- Ideias de progressão serão inseridas aqui -->
-                    </ul>
+                    <h3 class="text-xl font-bold mb-4 text-slate-700">💡 Tutor Virtual (Prof. Silva)</h3>
+                    <div id="tutor-feedback-area" class="space-y-3 overflow-y-auto p-3 bg-slate-50 rounded-lg max-h-48 min-h-[100px]">
+                        <p class="tutor-message-initial text-slate-500 italic text-sm">Clique no botão abaixo para pedir uma dica sobre seu poema!</p>
+                    </div>
+                    <button id="btn-get-feedback" class="btn-secondary w-full mt-4">Pedir uma Dica 💡</button>
                 </div>
                 
                 <!-- Estatísticas -->
@@ -704,16 +745,10 @@ HTML_TEMPLATE = """
                 appState.chosenTheme = theme;
                 document.getElementById('chosen-theme-title').textContent = theme;
                 
-                const data = await fetchAPI('/api/generate-ideas', { theme });
-                if (data && data.ideas) {
-                    const ideasList = document.getElementById('ideas-list');
-                    ideasList.innerHTML = ''; // Limpa ideias antigas
-                    data.ideas.forEach(idea => {
-                        const li = document.createElement('li');
-                        li.textContent = idea;
-                        ideasList.appendChild(li);
-                    });
-                }
+                // Limpa o chat do tutor ao escolher novo tema
+                const tutorFeedbackArea = document.getElementById('tutor-feedback-area');
+                tutorFeedbackArea.innerHTML = '<p class="tutor-message-initial text-slate-500 italic text-sm">Clique no botão abaixo para pedir uma dica sobre seu poema!</p>';
+                
                 showStage('writing');
             }
 
@@ -723,6 +758,8 @@ HTML_TEMPLATE = """
             const rhymeResults = document.getElementById('rhyme-results');
             const correctionsContainer = document.getElementById('corrections-container');
             const correctionsList = document.getElementById('corrections-list');
+            const tutorFeedbackArea = document.getElementById('tutor-feedback-area');
+            const btnGetFeedback = document.getElementById('btn-get-feedback');
 
             // Voltar
             document.getElementById('btn-back-theme').addEventListener('click', () => showStage('theme'));
@@ -736,6 +773,29 @@ HTML_TEMPLATE = """
                 
                 document.getElementById('stat-verses').textContent = verses;
                 document.getElementById('stat-stanzas').textContent = stanzas;
+            });
+
+            // Pedir Dica ao Tutor
+            btnGetFeedback.addEventListener('click', async () => {
+                const data = await fetchAPI('/api/get-feedback', { 
+                    theme: appState.chosenTheme, 
+                    text: appState.poemText 
+                });
+
+                if (data && data.feedback) {
+                    // Remove a mensagem inicial
+                    const initialMsg = tutorFeedbackArea.querySelector('.tutor-message-initial');
+                    if (initialMsg) initialMsg.remove();
+                    
+                    // Adiciona a nova dica do tutor (como um chat)
+                    const feedbackBubble = document.createElement('div');
+                    feedbackBubble.className = 'p-3 bg-indigo-100 text-indigo-900 rounded-lg text-sm';
+                    feedbackBubble.textContent = data.feedback;
+                    tutorFeedbackArea.appendChild(feedbackBubble);
+                    
+                    // Rola para a nova mensagem
+                    tutorFeedbackArea.scrollTop = tutorFeedbackArea.scrollHeight;
+                }
             });
 
             // Buscar Rimas
@@ -924,4 +984,3 @@ if __name__ == '__main__':
     # 'debug=True' é ótimo para desenvolvimento, mas deve ser 'False' em produção.
     # O Render gerencia isso. 'host=0.0.0.0' é necessário para o Render.
     app.run(debug=True, host='0.0.0.0', port=port)
-
