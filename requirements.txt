@@ -1,0 +1,5 @@
+Flask
+google-generativeai
+fpdf2
+gunicorn
+python-dotenv
