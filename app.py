@@ -984,3 +984,11 @@ if __name__ == '__main__':
     # 'debug=True' é ótimo para desenvolvimento, mas deve ser 'False' em produção.
     # O Render gerencia isso. 'host=0.0.0.0' é necessário para o Render.
     app.run(debug=True, host='0.0.0.0', port=port)
+
+
+
+
+
+
+
+
