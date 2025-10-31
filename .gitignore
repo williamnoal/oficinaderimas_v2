@@ -1,0 +1,7 @@
+# Ambiente Virtual
+venv/
+*.pyc
+__pycache__/
+
+# Arquivo de Segredos
+.env
