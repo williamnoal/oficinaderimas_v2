@@ -382,9 +382,9 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oficina de Poemas - Python (Flask)</title>
     <!-- Carrega TailwindCSS -->
-    <script src="[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com)"></script>
+     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Carrega Fontes (Lúdica + Padrão) -->
-    <link href="[https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Playpen+Sans:wght@400;600&display=swap](https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Playpen+Sans:wght@400;600&display=swap)" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Playpen+Sans:wght@400;600&display=swap" rel="stylesheet">
     <style>
         /* Estilos customizados (DUA/Lúdico) */
         body {
