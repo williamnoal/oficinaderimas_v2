@@ -156,8 +156,9 @@ def api_find_rhymes():
     Sua tarefa é gerar uma lista de palavras que rimam com '{word}' para um aluno de 11 anos, com o tema '{theme}'.
     **REGRA 1: PRECISÃO FONÉTICA TOTAL (A MAIS IMPORTANTE)**
     A semelhança fonética a partir da sílaba tônica é obrigatória.
-    - **Timbre da Vogal:** 'esc**ó**la' (aberto) rima com 'b**ó**la', mas NÃO rima com 'b**ô**la' (fechado).
+    - **Timbre da Vogal:** 'esc**ó**la' (aberto) rima com 'b**ó**la', mas NÃO rima com 'b**ô**la' (fechado). É importante redobrar a atenção com essa regra, por exemplo gol, fechado, não rima com sol, aberto. 
     - **Sons Nasais:** 'coraç**ão**' rima com 'emoç**ão**'.
+    - Use todos os parâmetros fonéticos do português brasileiro. 
     **REGRA 2: RELEVÂNCIA (11-13 anos)**
     - Se possível, e apenas se a REGRA 1 for 100% cumprida, prefira palavras do tema '{theme}'.
     - Evite palavras arcaicas ou complexas.
