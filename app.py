@@ -30,7 +30,7 @@ def get_model():
     try:
         genai.configure(api_key=API_KEY)
         # Usando o 'gemini-1.5-flash-latest' - sua NOVA chave DEVE ter acesso a ele.
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        model = genai.GenerativeModel('gemini-2.5')
         print("Modelo 'gemini-1.5-flash-latest' configurado com sucesso.")
         return model
     except Exception as e:
