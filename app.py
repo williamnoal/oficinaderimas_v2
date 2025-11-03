@@ -29,19 +29,20 @@ def get_model():
     
     try:
         genai.configure(api_key=API_KEY)
-        model = genai.GenerativeModel('gemini-2.5-pro')
-        print("Modelo 'gemini-2.5-pro' configurado com sucesso.")
+        # SUCESSO! Usando o 'gemini-pro-latest' como modelo principal (O Confiável).
+        model = genai.GenerativeModel('gemini-pro-latest')
+        print("Modelo 'gemini-pro-latest' configurado com sucesso.")
         return model
     except Exception as e:
-        print(f"Erro ao configurar o modelo Gemini: {e}")
-        # Tenta o modelo 'gemini-2.5-flash' como fallback
+        print(f"Erro ao configurar o 'gemini-pro-latest': {e}")
+        # Tenta o 'gemini-flash-latest' como fallback (O Rápido)
         try:
-            print("Tentando fallback para 'gemini-2.5-flash'...")
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            print("Modelo 'gemini-2.5-flash' configurado com sucesso.")
+            print("Tentando fallback para 'gemini-flash-latest'...")
+            model = genai.GenerativeModel('gemini-flash-latest')
+            print("Modelo 'gemini-flash-latest' configurado com sucesso.")
             return model
         except Exception as e2:
-            print(f"Erro ao configurar 'gemini-2.5-flash' também: {e2}")
+            print(f"Erro ao configurar 'gemini-flash-latest' também: {e2}")
             return None
 
 def generate_ai_content(prompt_text, force_json=False):
@@ -49,21 +50,6 @@ def generate_ai_content(prompt_text, force_json=False):
     model = get_model() # <- Corrigido para chamar a função correta
     if model is None:
         raise Exception("Modelo de IA não inicializado. Verifique a API Key e as permissões no Google Cloud.")
-
-    try:
-        genai.configure(api_key=API_KEY)
-        # Usando o 'gemini-1.5-flash-latest' - sua NOVA chave terá acesso a ele.
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        return model
-    except Exception as e:
-        print(f"Erro ao configurar o modelo Gemini: {e}")
-        return None
-
-def generate_ai_content(prompt_text, force_json=False):
-    """Função central para chamadas de IA, com retry e parsing de JSON."""
-    model = configure_ai_model()
-    if model is None:
-        raise Exception("Modelo de IA não inicializado.")
 
     try:
         # Configuração para forçar a saída em JSON se solicitado
@@ -92,12 +78,26 @@ def generate_ai_content(prompt_text, force_json=False):
         print(f"Prompt que falhou: {prompt_text}")
         # Tenta extrair a resposta de erro da API se disponível
         try:
-            error_details = json.loads(str(e))
-            if 'message' in error_details:
-                raise Exception(f"Erro da API Gemini: {error_details['message']}")
-        except:
-            pass # Mantém a exceção original
-        raise Exception(f"Falha ao gerar ou processar resposta da IA: {e}")
+            # Tenta extrair a mensagem de erro específica do gRPC/Google
+            if hasattr(e, 'message'):
+                error_message = e.message
+            elif hasattr(e, 'args') and e.args:
+                error_message = str(e.args[0])
+            else:
+                error_message = str(e)
+
+            # Verifica se o erro é o 404 que estávamos vendo
+            if "is not found" in error_message:
+                 print("!! ERRO 404 DETECTADO: Verifique o nome do modelo e as permissões da API Key !!")
+                 raise Exception(f"Erro 404 da API Gemini: {error_message}")
+            
+            raise Exception(f"Falha ao gerar ou processar resposta da IA: {error_message}")
+
+        except json.JSONDecodeError:
+            print(f"Erro de JSON: A IA não retornou um JSON válido. Resposta: {text}")
+            raise Exception(f"A IA não retornou um JSON válido. Resposta: {text}")
+        except Exception as e_inner:
+             raise e_inner # Mantém a exceção original
 
 
 # --- 2. LÓGICA DE IA PEDAGÓGICA (PROMPTS OTIMIZADOS) ---
@@ -134,59 +134,58 @@ def api_generate_themes():
             raise Exception("A IA não retornou uma lista de temas.")
         return jsonify({"themes": themes})
     except Exception as e:
+        print(f"[API /api/generate-themes] Erro: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/get-feedback', methods=['POST'])
-def api_get_feedback():
+# --- NOVO ENDPOINT DE IDEIAS ESTÁTICAS ---
+@app.route('/api/get-ideas', methods=['POST'])
+def api_get_ideas():
     """
-    (DUA - Feedback / BNCC - EF67LP31)
-    Dá feedback interativo e semântico sobre o poema em progresso.
-    Esta é a principal função "conversacional".
+    (DUA - Suporte)
+    Gera 5 ideias de progressão temática estáticas com base no tema.
     """
     data = request.json
     theme = data.get('theme')
-    text = data.get('text')
+    if not theme:
+        return jsonify({"error": "Nenhum tema fornecido."}), 400
 
-    if not text:
-        return jsonify({"feedback": "Comece a escrever seu poema e depois clique aqui para pedir uma dica!"})
-
-    # PROMPT OTIMIZADO: O novo prompt "conversacional".
+    # PROMPT OTIMIZADO: Pede 5 ideias focadas nos sentidos (BNCC/DUA).
     prompt = f"""
-    Aja como um tutor de escrita criativa (Professor Silva), amigável, encorajador e especialista em alunos do 6º ano.
-    O tema do poema do aluno é: "{theme}".
-    O rascunho atual do poema é:
-    ---
-    {text}
-    ---
+    Aja como um professor de escrita criativa. O tema do poema é '{theme}'.
+    Gere uma lista de 5 ideias CURTAS (máximo 10 palavras cada) para um aluno do 6º ano.
+    As ideias devem ser perguntas ou comandos para inspirar a escrita.
 
-    Sua tarefa é CONVERSAR com o aluno, dando UMA ÚNICA dica específica e gentil para ajudá-lo a escrever a PRÓXIMA parte.
-
-    REGRAS OBRIGATÓRIAS:
-    1.  **UMA SÓ DICA:** Dê apenas UMA sugestão por vez (semântica, sensorial ou rítmica).
-    2.  **FOCO NA PRÓXIMA AÇÃO:** Sua dica deve ser algo que o aluno possa aplicar AGORA.
-    3.  **PEDAGÓGICO (BNCC/DUA):** Incentive o uso dos sentidos (cheiros, sons, cores) ou recursos semânticos (comparações, metáforas simples).
-    4.  **TOM:** Seja gentil e encorajador. Comece elogiando algo (ex: "Que ótimo começo!", "Adorei essa linha!").
-    5.  **NÃO CORRIJA ORTOGRAFIA:** O botão "Revisar" faz isso. Foque na criatividade.
-    6.  **SEJA CURTO:** Máximo de 2-3 frases.
-    7.  **FALE COMO "Professor Silva":** Use a primeira pessoa (ex: "Eu notei...", "Que tal se você tentasse...").
-
-    Exemplos de Boas Respostas:
-    - "Uau, adorei a linha '{text.split('\n')[-1] if text else '...'}'. Para a próxima estrofe, que tal tentar descrever o *som* que o '{theme}' faz?"
-    - "Está ficando ótimo! Notei que você usou a palavra 'grande'. Que tal tentarmos uma comparação? Por exemplo, 'grande como o quê?'"
-    - "Excelente! Você descreveu o que vê. Agora, como você se *sente* sobre '{theme}'? Tente escrever um verso sobre isso."
+    REGRAS:
+    1.  Foco nos 5 sentidos (visão, som, cheiro, tato, paladar).
+    2.  Seja simples e lúdico.
+    3.  Retorne APENAS uma lista de 5 strings em JSON.
     
-    Formato da Resposta OBRIGATÓRIO (JSON):
-    {{
-        "feedback": "Sua resposta em 2-3 frases aqui."
-    }}
+    Exemplo de Resposta:
+    ["O que você vê quando pensa em {theme}?", "Qual é o som do {theme}?", "Que cheiro tem o {theme}?", "Como seria tocar o {theme}?", "Tente comparar {theme} com um animal."]
     """
     try:
-        response_json = generate_ai_content(prompt, force_json=True)
-        if not isinstance(response_json, dict) or 'feedback' not in response_json:
-            raise Exception("A IA não retornou um feedback válido.")
-        return jsonify(response_json)
+        ideas = generate_ai_content(prompt, force_json=True)
+        if not isinstance(ideas, list) or len(ideas) == 0:
+            raise Exception("A IA não retornou uma lista de ideias.")
+        
+        # Garante que temos exatamente 5 ideias
+        if len(ideas) > 5:
+            ideas = ideas[:5]
+        elif len(ideas) < 5:
+            # Fallback caso a IA falhe
+            ideas = [
+                f"Como é o cheiro de '{theme}'?",
+                f"Qual é o som principal de '{theme}'?",
+                f"Que cores você vê em '{theme}'?",
+                f"O que '{theme}' faz você sentir?",
+                f"Tente comparar '{theme}' com outra coisa."
+            ]
+            
+        return jsonify({"ideas": ideas})
     except Exception as e:
+        print(f"[API /api/get-ideas] Erro: {e}")
         return jsonify({"error": str(e)}), 500
+# --- FIM DO NOVO ENDPOINT ---
 
 @app.route('/api/find-rhymes', methods=['POST'])
 def api_find_rhymes():
@@ -233,6 +232,7 @@ def api_find_rhymes():
             
         return jsonify({"rhymes": rhymes})
     except Exception as e:
+        print(f"[API /api/find-rhymes] Erro: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/check-poem', methods=['POST'])
@@ -280,6 +280,7 @@ def api_check_poem():
             errors = []
         return jsonify({"errors": errors})
     except Exception as e:
+        print(f"[API /api/check-poem] Erro: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -582,14 +583,14 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
-                <!-- Tutor Interativo (DUA - Feedback) -->
+                <!-- *** MUDANÇA: Inspiração Criativa (Lista Estática) *** -->
                 <div class="card">
-                    <h3 class="text-xl font-bold mb-4 text-slate-700">💡 Tutor Virtual (Prof. Silva)</h3>
-                    <div id="tutor-feedback-area" class="space-y-3 overflow-y-auto p-3 bg-slate-50 rounded-lg max-h-48 min-h-[100px]">
-                        <p class="tutor-message-initial text-slate-500 italic text-sm">Clique no botão abaixo para pedir uma dica sobre seu poema!</p>
+                    <h3 class="text-xl font-bold mb-4 text-slate-700">💡 Inspiração Criativa</h3>
+                    <div id="inspiration-area" class="space-y-3 overflow-y-auto p-3 bg-slate-50 rounded-lg max-h-48 min-h-[100px]">
+                        <p class="text-slate-500 italic text-sm">Carregando ideias para o seu tema...</p>
                     </div>
-                    <button id="btn-get-feedback" class="btn-secondary w-full mt-4">Pedir uma Dica 💡</button>
                 </div>
+                <!-- *** FIM DA MUDANÇA *** -->
                 
                 <!-- Estatísticas -->
                 <div class="card">
@@ -744,11 +745,28 @@ HTML_TEMPLATE = """
                 appState.chosenTheme = theme;
                 document.getElementById('chosen-theme-title').textContent = theme;
                 
-                // Limpa o chat do tutor ao escolher novo tema
-                const tutorFeedbackArea = document.getElementById('tutor-feedback-area');
-                tutorFeedbackArea.innerHTML = '<p class="tutor-message-initial text-slate-500 italic text-sm">Clique no botão abaixo para pedir uma dica sobre seu poema!</p>';
+                // *** MUDANÇA: Limpa e busca 5 ideias estáticas ***
+                const inspirationArea = document.getElementById('inspiration-area');
+                inspirationArea.innerHTML = '<p class="text-slate-500 italic text-sm">Buscando ideias para o seu tema...</p>';
                 
                 showStage('writing');
+
+                // Busca as 5 ideias estáticas APÓS mostrar a tela
+                const data = await fetchAPI('/api/get-ideas', { theme });
+                if (data && data.ideas) {
+                    inspirationArea.innerHTML = ''; // Limpa
+                    const list = document.createElement('ul');
+                    list.className = 'list-disc list-inside space-y-2 text-slate-700';
+                    data.ideas.forEach(idea => {
+                        const li = document.createElement('li');
+                        li.textContent = idea;
+                        list.appendChild(li);
+                    });
+                    inspirationArea.appendChild(list);
+                } else {
+                    inspirationArea.innerHTML = '<p class="text-red-500">Não foi possível carregar as ideias.</p>';
+                }
+                // *** FIM DA MUDANÇA ***
             }
 
             // --- ETAPA 3: Lógica da Oficina de Escrita ---
@@ -757,9 +775,7 @@ HTML_TEMPLATE = """
             const rhymeResults = document.getElementById('rhyme-results');
             const correctionsContainer = document.getElementById('corrections-container');
             const correctionsList = document.getElementById('corrections-list');
-            const tutorFeedbackArea = document.getElementById('tutor-feedback-area');
-            const btnGetFeedback = document.getElementById('btn-get-feedback');
-
+            
             // Voltar
             document.getElementById('btn-back-theme').addEventListener('click', () => showStage('theme'));
 
@@ -774,28 +790,7 @@ HTML_TEMPLATE = """
                 document.getElementById('stat-stanzas').textContent = stanzas;
             });
 
-            // Pedir Dica ao Tutor
-            btnGetFeedback.addEventListener('click', async () => {
-                const data = await fetchAPI('/api/get-feedback', { 
-                    theme: appState.chosenTheme, 
-                    text: appState.poemText 
-                });
-
-                if (data && data.feedback) {
-                    // Remove a mensagem inicial
-                    const initialMsg = tutorFeedbackArea.querySelector('.tutor-message-initial');
-                    if (initialMsg) initialMsg.remove();
-                    
-                    // Adiciona a nova dica do tutor (como um chat)
-                    const feedbackBubble = document.createElement('div');
-                    feedbackBubble.className = 'p-3 bg-indigo-100 text-indigo-900 rounded-lg text-sm';
-                    feedbackBubble.textContent = data.feedback;
-                    tutorFeedbackArea.appendChild(feedbackBubble);
-                    
-                    // Rola para a nova mensagem
-                    tutorFeedbackArea.scrollTop = tutorFeedbackArea.scrollHeight;
-                }
-            });
+            // *** REMOVIDO: Event listener do btn-get-feedback (Tutor Interativo) ***
 
             // Buscar Rimas
             document.getElementById('btn-get-rhymes').addEventListener('click', async () => {
@@ -978,16 +973,12 @@ if __name__ == '__main__':
         print("!! funcionar. (ex: export GOOGLE_API_KEY='sua_chave')   !!")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
     
+    # Inicializa o modelo na inicialização para verificar a chave
+    get_model()
+    
     # Configura a porta para produção (Render) ou 5000 para desenvolvimento
     port = int(os.environ.get("PORT", 5000))
-    # 'debug=True' é ótimo para desenvolvimento, mas deve ser 'False' em produção.
-    # O Render gerencia isso. 'host=0.0.0.0' é necessário para o Render.
-    app.run(debug=True, host='0.0.0.0', port=port)
-
-
-
-
-
-
-
+    # 'debug=False' é crucial para produção no Render.
+    # 'host=0.0.0.0' é necessário para o Render.
+    app.run(debug=False, host='0.0.0.0', port=port)
 
