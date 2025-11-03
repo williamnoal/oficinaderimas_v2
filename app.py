@@ -324,11 +324,23 @@ class PoemPDF(FPDF):
             self.rect(5, 5, self.w - 10, self.h - 10)
             self.set_line_width(0.5)
             self.rect(7, 7, self.w - 14, self.h - 14)
+        elif style == 'ondas':
+            self.draw_waves()
         elif style == 'estrelas':
             self.draw_stars()
         else: # Padrão 'simples'
             self.set_line_width(1)
             self.rect(5, 5, self.w - 10, self.h - 10)
+
+    def draw_waves(self):
+        margin, step, amplitude = 10, 5, 2
+        self.set_line_width(0.5)
+        for x in range(margin, int(self.w - margin), step):
+            self.curve(x, margin, x + step / 2, margin - amplitude, x + step, margin)
+            self.curve(x, self.h - margin, x + step / 2, self.h - margin + amplitude, x + step, self.h - margin)
+        for y in range(margin, int(self.h - margin), step):
+            self.curve(margin, y, margin - amplitude, y + step/2, margin, y + step)
+            self.curve(self.w - margin, y, self.w - margin + amplitude, y + step/2, self.w - margin, y + step)
 
     def draw_stars(self):
         self.set_line_width(0.2)
@@ -363,7 +375,7 @@ def api_generate_pdf():
         - "bg_color_hex": Cor de fundo suave (ex: "#F0F8FF").
         - "text_color_hex": Cor de texto escura e legível (ex: "#333333").
         - "title_color_hex": Cor de destaque para o título (ex: "#FF6347").
-        - "border_style": Escolha UM: "simples", "dupla", "estrelas".
+        - "border_style": Escolha UM: "simples", "dupla", "ondas", "estrelas".
         - "border_color_hex": Cor para a borda (ex: "#4682B4").
         """
         
@@ -402,7 +414,9 @@ def api_generate_pdf():
         author_encoded = data['author'].encode('latin-1', 'replace').decode('latin-1')
         pdf.multi_cell(0, 10, f'- {author_encoded}', align='R')
         
-        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        # CORREÇÃO: pdf.output() já retorna 'bytes' (bytearray) no fpdf2.
+        # Não precisamos (e não podemos) chamar .encode() nele.
+        pdf_bytes = pdf.output()
         
         # Retorna o PDF como um arquivo para download
         safe_filename = re.sub(r'[^a-z0-9]', '_', data['title'].lower(), re.IGNORECASE) or 'poema'
