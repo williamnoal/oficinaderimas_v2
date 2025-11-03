@@ -29,20 +29,19 @@ def get_model():
     
     try:
         genai.configure(api_key=API_KEY)
-        # Usando o 'gemini-1.5-flash-latest' - sua NOVA chave DEVE ter acesso a ele.
-        model = genai.GenerativeModel('gemini-2.5')
-        print("Modelo 'gemini-1.5-flash-latest' configurado com sucesso.")
+        model = genai.GenerativeModel('gemini-2.5-pro')
+        print("Modelo 'gemini-2.5-pro' configurado com sucesso.")
         return model
     except Exception as e:
         print(f"Erro ao configurar o modelo Gemini: {e}")
-        # Tenta o modelo 'gemini-pro' como fallback
+        # Tenta o modelo 'gemini-2.5-flash' como fallback
         try:
-            print("Tentando fallback para 'gemini-pro'...")
-            model = genai.GenerativeModel('gemini-pro')
-            print("Modelo 'gemini-pro' configurado com sucesso.")
+            print("Tentando fallback para 'gemini-2.5-flash'...")
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            print("Modelo 'gemini-2.5-flash' configurado com sucesso.")
             return model
         except Exception as e2:
-            print(f"Erro ao configurar 'gemini-pro' também: {e2}")
+            print(f"Erro ao configurar 'gemini-2.5-flash' também: {e2}")
             return None
 
 def generate_ai_content(prompt_text, force_json=False):
