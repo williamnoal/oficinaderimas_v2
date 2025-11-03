@@ -5,7 +5,8 @@ import google.generativeai as genai
 from flask import Flask, jsonify, request, Response, render_template_string
 from datetime import datetime
 from collections import defaultdict
-from weasyprint import HTML, CSS # Para o motor de PDF
+# NOVAS IMPORTAÇÕES PARA O MOTOR DE PDF
+from weasyprint import HTML, CSS
 
 # --- 1. CONFIGURAÇÃO DA APLICAÇÃO FLASK E API GEMINI ---
 
@@ -27,11 +28,13 @@ def get_model():
     
     try:
         genai.configure(api_key=API_KEY)
+        # Usando 'gemini-pro-latest' que foi validado pelo seu teste de API
         model = genai.GenerativeModel('gemini-pro-latest')
         print("Modelo 'gemini-pro-latest' configurado com sucesso.")
         return model
     except Exception as e:
         print(f"Erro ao configurar o 'gemini-pro-latest': {e}")
+        # Tenta o 'gemini-flash-latest' como fallback
         try:
             print("Tentando fallback para 'gemini-flash-latest'...")
             model = genai.GenerativeModel('gemini-flash-latest')
@@ -48,6 +51,7 @@ def generate_ai_content(prompt_text, force_json=False):
         raise Exception("Modelo de IA não inicializado. Verifique a API Key e as permissões no Google Cloud.")
 
     try:
+        # Configuração para forçar a saída em JSON se solicitado
         generation_config = {}
         if force_json:
             generation_config["response_mime_type"] = "application/json"
@@ -56,17 +60,21 @@ def generate_ai_content(prompt_text, force_json=False):
         
         text = response.text
         
-        if force_json or ('[' in text and ']' in text) or ('{' in text and '}' in text):
+        # Limpeza robusta para extrair JSON de blocos de markdown
+        if force_json or '[' in text or '{' in text:
             match = re.search(r'```(json)?(.*)```', text, re.DOTALL | re.IGNORECASE)
             if match:
                 text = match.group(2).strip()
             
+            # Tenta carregar o JSON
             return json.loads(text)
         
+        # Retorna texto plano (para o novo PDF CSS)
         return text
 
     except Exception as e:
         print(f"Erro na geração de conteúdo da IA: {e}")
+        # Simplifica a extração de erro para depuração
         error_message = str(e)
         if "is not found" in error_message:
              print("!! ERRO 404 DETECTADO: Verifique o nome do modelo e as permissões da API Key !!")
@@ -86,6 +94,7 @@ def api_generate_themes():
     data = request.json
     interest = data.get('interest', 'amigos e escola')
 
+    # PROMPT OTIMIZADO: Mais específico, focado no 6º ano, formato JSON forçado.
     prompt = f"""
     Aja como um pedagogo e poeta, especialista em alunos do 6º ano (11-13 anos).
     O aluno escreveu sobre seus interesses: "{interest}"
@@ -120,6 +129,7 @@ def api_get_ideas():
     data = request.json
     theme = data.get('theme')
 
+    # PROMPT OTIMIZADO: Gera 5 ideias de progressão.
     prompt = f"""
     Aja como um professor de escrita criativa experiente, guiando um aluno de 11 a 13 anos.
     O tema do poema é '{theme}'.
@@ -143,6 +153,7 @@ def api_get_ideas():
     try:
         ideas = generate_ai_content(prompt, force_json=True)
         if not isinstance(ideas, list) or len(ideas) != 5:
+            # Fallback em caso de falha da IA
             ideas = [
                 f"Que *cor* o tema '{theme}' teria?",
                 f"Qual é o *cheiro* que te lembra '{theme}'?",
@@ -167,6 +178,7 @@ def api_find_rhymes():
     if not word:
         return jsonify({"error": "Nenhuma palavra fornecida."}), 400
 
+    # PROMPT OTIMIZADO: Mantém a regra de precisão fonética (essencial), mas força JSON e melhora a definição.
     prompt = f"""
     Aja como um linguista computacional e poeta, especialista em fonética do português brasileiro.
     Sua tarefa é gerar uma lista de palavras que rimam com '{word}' para um aluno de 11 anos, com o tema '{theme}'.
@@ -191,6 +203,7 @@ def api_find_rhymes():
         if not isinstance(rhymes, list):
             rhymes = []
         
+        # Filtra a palavra original
         rhymes = [r for r in rhymes if isinstance(r, dict) and r.get('palavra', '').lower() != word.lower()]
         
         if not rhymes:
@@ -215,6 +228,7 @@ def api_check_poem():
     lines = text.split('\n')
     numbered_text = "\n".join(f"{i+1}: {line}" for i, line in enumerate(lines) if line.strip())
 
+    # PROMPT OTIMIZADO: Regras mais claras, foco em ignorar pontuação (liberdade poética).
     prompt = f"""
     Aja como um professor de português experiente e compreensivo, revisando um poema de um aluno de 11 anos.
     O aluno pode usar liberdade poética.
@@ -249,7 +263,8 @@ def api_check_poem():
         return jsonify({"error": str(e)}), 500
 
 
-# --- 3. MOTOR DE GERAÇÃO DE PDF (WeasyPrint) ---
+# --- 3. NOVO MOTOR DE GERAÇÃO DE PDF (WeasyPrint) ---
+# Esta seção foi completamente refeita para usar HTML+CSS.
 
 @app.route('/api/generate-pdf', methods=['POST'])
 def api_generate_pdf():
@@ -260,6 +275,8 @@ def api_generate_pdf():
         return jsonify({"error": "Dados incompletos para PDF"}), 400
 
     try:
+        # 1. GERAR O CSS COM A IA
+        # PROMPT TOTALMENTE NOVO: Focado em gerar CSS.
         style_prompt = f"""
         Aja como um designer web e gráfico. O tema do poema é "{data['theme']}".
         Sua tarefa é gerar uma string de CSS para estilizar um PDF de poema.
@@ -303,6 +320,7 @@ def api_generate_pdf():
         """
         
         try:
+            # force_json=False porque esperamos uma string de texto (CSS)
             css_string = generate_ai_content(style_prompt, force_json=False)
             if "{" not in css_string or "}" not in css_string:
                 raise Exception("Estilo CSS retornado pela IA é inválido.")
@@ -315,6 +333,8 @@ def api_generate_pdf():
             .author { text-align: right; font-style: italic; margin-top: 30px; font-size: 14pt; }
             """
 
+        # 2. GERAR O HTML
+        # Converte as quebras de linha do poema em tags <br> e agrupa estrofes em <p>
         poem_html = "".join(f"<p>{stanza.replace(os.linesep, '<br>')}</p>" for stanza in data['text'].split(os.linesep * 2))
 
         html_template = f"""
@@ -331,9 +351,12 @@ def api_generate_pdf():
         </html>
         """
 
+        # 3. RENDERIZAR O PDF (Motor WeasyPrint)
         html = HTML(string=html_template)
-        pdf_bytes = html.write_pdf()
+        # Passamos a string CSS diretamente para o WeasyPrint
+        pdf_bytes = html.write_pdf() # Não precisamos mais da folha de estilo separada
         
+        # 4. RETORNAR O PDF
         safe_filename = re.sub(r'[^a-z0-9]', '_', data['title'].lower(), re.IGNORECASE) or 'poema'
         
         return Response(
@@ -347,248 +370,209 @@ def api_generate_pdf():
         return jsonify({"error": f"Erro interno ao gerar PDF: {e}"}), 500
 
 
-# --- 4. NOVO TEMPLATE DO FRONTEND (HTML/CSS/JS - V5) ---
-# Inteiramente reescrito para o novo design.
+# --- 4. TEMPLATE DO FRONTEND (HTML/CSS/JS - V3) ---
+
+# Frontend completo embutido em uma string Python.
+# Usa TailwindCSS para um design moderno e acessível (DUA).
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Oficina de Poemas - Python</title>
-    <script src="[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com)"></script>
-    <!-- Novas fontes inspiradas no design da imagem --><link href="[https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Pacifico&display=swap](https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Pacifico&display=swap)" rel="stylesheet">
+    <title>Oficina de Poemas - Python (Flask)</title>
+    <!-- Carrega TailwindCSS -->
+     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Carrega Fontes (Lúdica + Padrão) -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Playpen+Sans:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        /* Paleta de Cores Inspirada: */
-        /* Primária: Verde Menta / Azul Claro */
-        /* Secundária: Roxo/Lavanda */
-        /* Neutros: Branco, Cinza Claro, Cinza Escuro */
-        :root {
-            --color-primary: #86C8BC; /* Verde Menta */
-            --color-secondary: #9B72AA; /* Roxo Lavanda */
-            --color-text-dark: #34495E; /* Cinza escuro */
-            --color-text-light: #ECF0F1; /* Cinza claro */
-            --color-bg-light: #FFFFFF; /* Branco */
-            --color-bg-medium: #F8F9FA; /* Off-white */
-            --color-accent: #FFD2A8; /* Pêssego */
-            --color-error: #E74C3C; /* Vermelho */
-        }
-
+        /* Estilos customizados (DUA/Lúdico) */
         body {
-            font-family: 'Poppins', sans-serif;
-            background: linear-gradient(135deg, var(--color-primary) 0%, #A2D9CE 100%); /* Gradiente suave */
-            color: var(--color-text-dark);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 2rem;
-            box-sizing: border-box;
+            font-family: 'Roboto', sans-serif;
+            background-color: #f0f4f8; /* Fundo suave (slate-100) */
+            color: #1e293b; /* Texto principal (slate-800) */
         }
-        /* Título lúdico */
+        /* Fonte lúdica para títulos */
         .font-playful {
-            font-family: 'Pacifico', cursive;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+            font-family: 'Playpen Sans', cursive;
         }
-        /* Efeitos de cartão (sombras, bordas) */
-        .card {
-            background-color: var(--color-bg-light);
-            border-radius: 1.5rem; /* Mais arredondado */
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); /* Sombra mais suave e proeminente */
-            padding: 2.5rem;
-            transition: all 0.3s ease-in-out;
-            border: 1px solid rgba(255,255,255,0.8); /* Borda sutil */
-        }
-        .card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.15);
-        }
-        /* Botões modernos */
+        /* Botão principal (DUA - Chama a atenção) */
         .btn-primary {
-            background-color: var(--color-secondary);
-            color: white;
-            padding: 0.8rem 2rem;
-            border-radius: 9999px; /* Pill shape */
-            font-weight: 600;
-            transition: all 0.3s ease-in-out;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            @apply bg-indigo-600 text-white font-bold py-3 px-6 rounded-full shadow-lg transition-transform transform hover:scale-105 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50 disabled:bg-indigo-300;
         }
-        .btn-primary:hover {
-            background-color: #7a5a8a; /* Um tom mais escuro */
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
-        }
-        .btn-primary:disabled {
-            background-color: #B0A0C0;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
+        /* Botão secundário */
         .btn-secondary {
-            background-color: var(--color-bg-medium);
-            color: var(--color-text-dark);
-            padding: 0.7rem 1.5rem;
-            border-radius: 9999px;
-            font-weight: 500;
-            border: 1px solid #D1D9DF;
-            transition: all 0.3s ease-in-out;
+            @apply bg-slate-200 text-slate-700 font-semibold py-2 px-4 rounded-full shadow-sm transition-colors hover:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:bg-slate-100;
         }
-        .btn-secondary:hover {
-            background-color: #E2E8F0;
-            transform: translateY(-1px);
+        /* Botão de correção (DUA - Feedback) */
+        .btn-correction {
+             @apply bg-emerald-100 text-emerald-800 font-medium py-1 px-3 rounded-full text-sm transition-colors hover:bg-emerald-200 focus:outline-none focus:ring-2 focus:ring-emerald-400;
         }
-        .btn-secondary:disabled {
-            background-color: #F0F4F8;
-            cursor: not-allowed;
+        /* Card (DUA - separação de conteúdo) */
+        .card {
+            @apply bg-white rounded-2xl shadow-xl p-6 transition-all;
         }
-        /* Inputs */
-        input[type="text"], textarea {
-            border: 1px solid #D1D9DF;
-            border-radius: 0.75rem; /* Mais arredondado */
-            padding: 0.75rem 1rem;
-            font-size: 1rem;
-            transition: all 0.2s ease-in-out;
+        /* Foco acessível (WCAG) */
+        textarea:focus, input:focus, button:focus-visible {
+            @apply ring-2 ring-indigo-500 ring-opacity-75 outline-none;
         }
-        input[type="text"]:focus, textarea:focus {
-            border-color: var(--color-secondary);
-            box-shadow: 0 0 0 3px rgba(155, 114, 170, 0.3); /* Ring color based on secondary */
-            outline: none;
-        }
-        /* Scrollbar customizado */
+        /* Scrollbar customizado (para Chromebooks/Estética) */
         ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: var(--color-bg-medium); border-radius: 10px; }
-        ::-webkit-scrollbar-thumb { background: var(--color-secondary); border-radius: 10px; }
-        ::-webkit-scrollbar-thumb:hover { background: #7a5a8a; }
+        ::-webkit-scrollbar-track { background: #e0e7ff; }
+        ::-webkit-scrollbar-thumb { background: #6366f1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4f46e5; }
         
-        /* Loader */
+        /* Spinner de carregamento (dentro do overlay) */
         .loader {
-            border-top-color: var(--color-secondary); /* Cor secundária */
-            border-left-color: var(--color-secondary);
-            width: 50px; height: 50px;
+            width: 48px; height: 48px;
+            border: 5px solid #FFF;
+            border-bottom-color: #6366f1;
+            border-radius: 50%;
+            display: inline-block;
+            box-sizing: border-box;
+            animation: rotation 1s linear infinite;
         }
-        /* Ajustes de layout para o stage-writing */
-        .stage-writing-grid {
-            display: grid;
-            grid-template-columns: 3fr 2fr; /* Colunas para main e aside */
-            gap: 2rem;
-            height: 100%;
+        @keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* Overlay de carregamento (DUA - Feedback de processo) */
+        #loading-overlay {
+            @apply fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300;
         }
-        @media (max-width: 768px) {
-            .stage-writing-grid {
-                grid-template-columns: 1fr; /* Coluna única em mobile */
-            }
+        .loading-hidden {
+            @apply opacity-0 pointer-events-none;
         }
-        .scrollable-card {
-            max-height: calc(100vh - 200px); /* Ajuste conforme necessidade */
-            overflow-y: auto;
+        
+        /* Efeito de fade-in para as etapas */
+        .stage {
+            animation: fadeIn 0.5s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
     </style>
 </head>
-<body class="p-8">
+<body class="flex items-center justify-center min-h-screen p-4">
 
-    <!-- Container principal (Centralizado e Flutuante) --><div class="w-full max-w-7xl h-full mx-auto flex flex-col justify-center items-center">
+    <!-- Container principal da aplicação (evita rolagem no body) -->
+    <div class="w-full max-w-7xl mx-auto h-[95vh] flex flex-col">
     
-        <!-- ETAPA 1: Interesses --><div id="stage-interest" class="card w-full max-w-xl text-center stage">
-            <h1 class="text-5xl font-playful font-bold mb-6">Oficina de Poemas ✏️</h1>
-            <p class="text-lg text-gray-600 mb-8">Para começar, me conte do que você mais gosta ou o que te inspira hoje!</p>
-            <textarea id="interest-input" class="w-full h-36 p-4 border rounded-xl text-lg focus:ring-secondary" placeholder="Ex: Gosto de gatos, do cheiro de chuva e de viajar para a praia..."></textarea>
-            <button id="btn-get-themes" class="btn-primary mt-8 w-full">
+        <!-- ETAPA 1: Interesses (DUA - Recrutar Interesse) -->
+        <div id="stage-interest" class="card w-full max-w-2xl mx-auto my-auto text-center stage">
+            <h1 class="text-4xl font-playful font-bold text-indigo-600 mb-4">Vamos Criar um Poema! 🚀</h1>
+            <p class="text-lg text-slate-600 mb-6">Para começar, me conte do que você mais gosta. Pode ser um jogo, um animal, um lugar, ou um sentimento!</p>
+            <textarea id="interest-input" class="w-full h-32 p-4 border border-slate-300 rounded-lg text-lg focus:ring-2 focus:ring-indigo-500" placeholder="Ex: Gosto de jogar futebol no parque, do meu cachorro e de olhar as estrelas..."></textarea>
+            <button id="btn-get-themes" class="btn-primary mt-6">
                 Gerar Ideias de Temas →
             </button>
             <p id="interest-error" class="text-red-500 mt-4 hidden">Por favor, escreva algo para começar!</p>
         </div>
 
-        <!-- ETAPA 2: Escolha do Tema --><div id="stage-theme" class="card w-full max-w-3xl text-center stage hidden">
-            <h1 class="text-4xl font-playful font-bold mb-4">Escolha sua inspiração! ✨</h1>
-            <p class="text-lg text-gray-600 mb-8">Pensei nestes temas com base no que você escreveu. Escolha um para começar a escrever:</p>
+        <!-- ETAPA 2: Escolha do Tema -->
+        <div id="stage-theme" class="card w-full max-w-3xl mx-auto my-auto text-center stage hidden">
+            <h1 class="text-4xl font-playful font-bold text-indigo-600 mb-4">Ótimas Ideias! ✨</h1>
+            <p class="text-lg text-slate-600 mb-8">Pensei nestes temas com base no que você escreveu. Escolha um para começar:</p>
             <div id="theme-buttons" class="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <!-- Botões de tema serão inseridos aqui pelo JS --></div>
+                <!-- Botões de tema serão inseridos aqui pelo JS -->
+            </div>
             <button id="btn-back-interest" class="btn-secondary mt-8">← Voltar</button>
         </div>
 
-        <!-- ETAPA 3: Oficina de Escrita --><div id="stage-writing" class="w-full h-[90vh] hidden stage flex flex-col items-center">
+        <!-- ETAPA 3: Oficina de Escrita (Layout principal) -->
+        <div id="stage-writing" class="flex-1 h-full hidden flex-col md:flex-row gap-6 stage">
             
-            <header class="card w-full mb-6 flex-shrink-0">
-                <h1 class="text-4xl font-playful font-bold">Oficina Criativa 🚀</h1>
-                <p class="text-lg text-gray-600">Tema Escolhido: <strong id="chosen-theme-title" class="text-secondary-dark"></strong></p>
-            </header>
-            
-            <div class="stage-writing-grid flex-1 w-full max-w-6xl">
-                <!-- Coluna Principal: Editor e Correções --><main class="flex flex-col gap-6">
-                    <!-- Editor de Poema --><div class="card flex-1 flex flex-col scrollable-card">
-                        <label for="poem-editor" class="text-xl font-bold mb-3 text-gray-700">Seu Poema:</label>
-                        <textarea id="poem-editor" class="w-full flex-1 p-4 border rounded-xl text-lg leading-relaxed resize-none focus:ring-secondary" placeholder="Comece a escrever seus versos aqui..."></textarea>
+            <!-- Coluna Principal: Editor e Correções -->
+            <main class="flex-[3] flex flex-col gap-6 h-full">
+                <header class="card flex-shrink-0">
+                    <h1 class="text-3xl font-playful font-bold text-indigo-600">✍️ Oficina de Escrita</h1>
+                    <p class="text-lg text-slate-600">Tema: <strong id="chosen-theme-title" class="text-indigo-700"></strong></p>
+                </header>
+                
+                <!-- Editor de Poema -->
+                <div class="card flex-1 flex flex-col">
+                    <label for="poem-editor" class="text-xl font-bold mb-2 text-slate-700">Escreva seu poema aqui:</label>
+                    <textarea id="poem-editor" class="w-full flex-1 p-4 border border-slate-300 rounded-lg text-lg leading-relaxed focus:ring-2 focus:ring-indigo-500" placeholder="O sol se põe no horizonte..."></textarea>
+                </div>
+                
+                <!-- Botões de Ação -->
+                <div class="flex-shrink-0 flex flex-col sm:flex-row gap-4">
+                    <button id="btn-check-spelling" class="btn-secondary flex-1 py-3">🕵️‍♀️ Revisar Ortografia</button>
+                    <button id="btn-finish-poem" class="btn-primary flex-1">Concluir Poema 🏁</button>
+                </div>
+                
+                <!-- Container de Correções (DUA - Feedback Construtivo) -->
+                <div id="corrections-container" class="card flex-shrink-0 hidden max-h-[300px] overflow-y-auto">
+                    <h3 class="text-xl font-bold mb-4 text-slate-700">Dicas do Assistente</h3>
+                    <div id="corrections-list">
+                        <!-- Correções serão inseridas aqui -->
                     </div>
-                    
-                    <!-- Botões de Ação --><div class="flex flex-col sm:flex-row gap-4">
-                        <button id="btn-check-spelling" class="btn-secondary flex-1 py-3">🕵️‍♀️ Revisar Ortografia</button>
-                        <button id="btn-finish-poem" class="btn-primary flex-1 py-3">Concluir Poema 🏁</button>
-                    </div>
-                    
-                    <!-- Container de Correções --><div id="corrections-container" class="card hidden max-h-[250px] overflow-y-auto">
-                        <h3 class="text-xl font-bold mb-4 text-gray-700">Dicas do Assistente ✨</h3>
-                        <div id="corrections-list">
-                            <!-- Correções serão inseridas aqui --></div>
-                    </div>
-                </main>
+                </div>
+            </main>
 
-                <!-- Coluna Lateral: Ferramentas de Apoio --><aside class="flex flex-col gap-6">
-                    <!-- Caça-Rimas --><div class="card scrollable-card">
-                        <h3 class="text-xl font-bold mb-4 text-gray-700">🔎 Caça-Rimas</h3>
-                        <div class="flex gap-2">
-                            <input type="text" id="rhyme-input" class="w-full p-2 border rounded-xl" placeholder="Palavra para rimar...">
-                            <button id="btn-get-rhymes" class="btn-secondary px-4">Buscar</button>
-                        </div>
-                        <div id="rhyme-results" class="mt-4 max-h-40 overflow-y-auto text-sm">
-                            <p class="text-gray-400 italic">Digite uma palavra e clique em "Buscar" para ver as rimas.</p>
-                        </div>
+            <!-- Coluna Lateral: Ferramentas de Apoio (DUA - Suporte) -->
+            <aside class="flex-[2] flex flex-col gap-6 h-full max-h-full overflow-y-auto">
+                <!-- Caça-Rimas (BNCC - EF67LP31) -->
+                <div class="card">
+                    <h3 class="text-xl font-bold mb-4 text-slate-700">🔎 Caça-Rimas</h3>
+                    <div class="flex gap-2">
+                        <input type="text" id="rhyme-input" class="w-full p-2 border border-slate-300 rounded-lg" placeholder="Digite uma palavra...">
+                        <button id="btn-get-rhymes" class="btn-secondary px-4">Buscar</button>
                     </div>
+                    <div id="rhyme-results" class="mt-4 max-h-40 overflow-y-auto text-sm">
+                        <p class="text-slate-400 italic">Digite uma palavra e clique em "Buscar" para ver as rimas.</p>
+                    </div>
+                </div>
 
-                    <!-- 5 Ideias de Progressão --><div class="card scrollable-card">
-                        <h3 class="text-xl font-bold mb-4 text-gray-700">💡 Inspiração Criativa</h3>
-                        <ul id="progression-ideas-list" class="list-disc list-inside space-y-2 text-gray-600">
-                            <li class="italic text-gray-400">Aguardando ideias...</li>
-                        </ul>
-                    </div>
-                    
-                    <!-- Estatísticas --><div class="card flex-shrink-0">
-                        <h3 class="text-xl font-bold mb-4 text-gray-700">📊 Seu Progresso</h3>
-                        <div class="flex justify-around text-center">
-                            <div>
-                                <div id="stat-verses" class="text-5xl font-bold" style="color: var(--cor-primaria);">0</div>
-                                <div class="text-sm text-gray-500">Versos</div>
-                            </div>
-                            <div>
-                                <div id="stat-stanzas" class="text-5xl font-bold" style="color: var(--cor-primaria);">0</div>
-                                <div class="text-sm text-gray-500">Estrofes</div>
-                            </div>
+                <!-- 5 Ideias de Progressão (NOVO - V3) -->
+                <div class="card">
+                    <h3 class="text-xl font-bold mb-4 text-slate-700">💡 Inspiração Criativa</h3>
+                    <ul id="progression-ideas-list" class="list-disc list-inside space-y-2 text-slate-600">
+                        <!-- 5 ideias serão inseridas aqui pelo JS -->
+                        <li class="italic text-slate-400">Aguardando ideias...</li>
+                    </ul>
+                </div>
+                
+                <!-- Estatísticas -->
+                <div class="card">
+                    <h3 class="text-xl font-bold mb-4 text-slate-700">📊 Estatísticas</h3>
+                    <div class="flex justify-around text-center">
+                        <div>
+                            <div id="stat-verses" class="text-4xl font-bold text-indigo-600">0</div>
+                            <div class="text-sm text-slate-500">Versos</div>
+                        </div>
+                        <div>
+                            <div id="stat-stanzas" class="text-4xl font-bold text-indigo-600">0</div>
+                            <div class="text-sm text-slate-500">Estrofes</div>
                         </div>
                     </div>
-                    <button id="btn-back-theme" class="btn-secondary w-full mt-auto">← Mudar Tema</button>
-                </aside>
-            </div>
+                </div>
+                <button id="btn-back-theme" class="btn-secondary w-full mt-auto">← Mudar Tema</button>
+            </aside>
         </div>
         
-        <!-- ETAPA 4: Finalização e PDF --><div id="stage-pdf" class="card w-full max-w-xl text-center stage hidden">
-            <h1 class="text-4xl font-playful font-bold mb-4">Seu Poema está Pronto! 🎨</h1>
-            <p class="text-lg text-gray-600 mb-6">Agora, para os toques finais do seu PDF mágico.</p>
+        <!-- ETAPA 4: Finalização e PDF -->
+        <div id="stage-pdf" class="card w-full max-w-lg mx-auto my-auto text-center stage hidden">
+            <h1 class="text-4xl font-playful font-bold text-indigo-600 mb-4">Seu Poema está Lindo! 🏆</h1>
+            <p class="text-lg text-slate-600 mb-6">Vamos dar os toques finais para criar seu PDF personalizado.</p>
             <div class="space-y-4">
-                <input type="text" id="pdf-title" class="w-full p-3 border rounded-xl text-lg focus:ring-secondary" placeholder="Qual o título do seu poema?">
-                <input type="text" id="pdf-author" class="w-full p-3 border rounded-xl text-lg focus:ring-secondary" placeholder="Seu nome, artista! (Opcional)">
+                <input type="text" id="pdf-title" class="w-full p-3 border border-slate-300 rounded-lg text-lg" placeholder="Qual o título do poema?">
+                <input type="text" id="pdf-author" class="w-full p-3 border border-slate-300 rounded-lg text-lg" placeholder="Qual o nome do(a) poeta? (Seu nome!)">
             </div>
-            <p id="pdf-error" class="text-red-500 mt-4 hidden">Por favor, preencha pelo menos o título!</p>
-            <button id="btn-generate-pdf" class="btn-primary mt-6 w-full">
-                Gerar PDF ✨
+            <p id="pdf-error" class="text-red-500 mt-4 hidden">Por favor, preencha o título e seu nome!</p>
+            <button id="btn-generate-pdf" class="btn-primary mt-6">
+                Gerar PDF Mágico ✨
             </button>
             <button id="btn-back-writing" class="btn-secondary mt-4">← Voltar para Edição</button>
         </div>
     </div>
 
-    <!-- Overlay de Carregamento Global --><div id="loading-overlay" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300 loading-hidden">
+    <!-- Overlay de Carregamento Global -->
+    <div id="loading-overlay" class="loading-hidden">
         <div class="loader"></div>
     </div>
 
-    <!-- JavaScript da Aplicação --><script>
+    <!-- JavaScript da Aplicação -->
+    <script>
         document.addEventListener('DOMContentLoaded', () => {
             // --- Variáveis de Estado e Elementos ---
             const appState = {
@@ -612,7 +596,8 @@ HTML_TEMPLATE = """
                 Object.values(stages).forEach(stage => stage.classList.add('hidden'));
                 if (stages[stageId]) {
                     stages[stageId].classList.remove('hidden');
-                    // stages[stageId].classList.add('stage'); // Animação já no CSS
+                    stages[stageId].classList.add('stage'); // Adiciona classe para animação
+                    // Garante que o layout flex seja aplicado corretamente
                     if (stageId === 'writing') {
                         stages[stageId].classList.add('flex');
                     } else {
@@ -627,30 +612,9 @@ HTML_TEMPLATE = """
             }
             
             function showToast(message, isError = false) {
-                // Melhoria simples para feedback rápido
-                const toastContainer = document.getElementById('toast-container') || (() => {
-                    const div = document.createElement('div');
-                    div.id = 'toast-container';
-                    div.className = 'fixed top-4 right-4 z-[9999] flex flex-col gap-2';
-                    document.body.appendChild(div);
-                    return div;
-                })();
-
-                const toast = document.createElement('div');
-                toast.className = `p-3 rounded-lg shadow-lg text-white font-medium ${isError ? 'bg-red-500' : 'bg-green-500'} transition-all duration-300 transform translate-x-full opacity-0`;
-                toast.textContent = message;
-                toastContainer.appendChild(toast);
-
-                setTimeout(() => {
-                    toast.classList.remove('translate-x-full', 'opacity-0');
-                    toast.classList.add('translate-x-0', 'opacity-100');
-                }, 10); // Pequeno atraso para a transição funcionar
-
-                setTimeout(() => {
-                    toast.classList.remove('translate-x-0', 'opacity-100');
-                    toast.classList.add('translate-x-full', 'opacity-0');
-                    toast.addEventListener('transitionend', () => toast.remove());
-                }, 4000);
+                // (Em um app maior, usaríamos uma biblioteca de toast)
+                alert(message);
+                if(isError) console.error(message);
             }
 
             // --- Função de API Helper (Otimizada) ---
@@ -665,11 +629,13 @@ HTML_TEMPLATE = """
                     
                     const contentType = response.headers.get("content-type");
                     
+                    // Caso 1: Download de PDF
                     if (contentType && contentType.includes("application/pdf")) {
                         if (!response.ok) throw new Error('Falha ao gerar o PDF.');
                         return await response.blob();
                     }
                     
+                    // Caso 2: Resposta JSON
                     const data = await response.json();
                     if (!response.ok) {
                         throw new Error(data.error || `Erro na API: ${response.statusText}`);
@@ -699,11 +665,11 @@ HTML_TEMPLATE = """
                 const data = await fetchAPI('/api/generate-themes', { interest });
                 if (data && data.themes) {
                     const themeButtons = document.getElementById('theme-buttons');
-                    themeButtons.innerHTML = '';
+                    themeButtons.innerHTML = ''; // Limpa temas antigos
                     data.themes.forEach(theme => {
                         const button = document.createElement('button');
                         button.textContent = theme;
-                        button.className = 'btn-secondary text-base md:text-lg p-4 h-auto truncate'; // Ajuste de altura
+                        button.className = 'btn-secondary text-base md:text-lg p-4 h-24 truncate';
                         button.title = theme;
                         button.onclick = () => handleThemeChoice(theme);
                         themeButtons.appendChild(button);
@@ -719,12 +685,13 @@ HTML_TEMPLATE = """
                 appState.chosenTheme = theme;
                 document.getElementById('chosen-theme-title').textContent = theme;
                 
+                // NOVO (V3): Busca as 5 ideias de progressão
                 const ideasList = document.getElementById('progression-ideas-list');
-                ideasList.innerHTML = '<li class="italic text-gray-400">A carregar ideias...</li>';
+                ideasList.innerHTML = '<li class="italic text-slate-400">A carregar ideias...</li>';
                 
                 const data = await fetchAPI('/api/get-ideas', { theme });
                 
-                ideasList.innerHTML = '';
+                ideasList.innerHTML = ''; // Limpa
                 if (data && data.ideas) {
                     data.ideas.forEach(idea => {
                         const li = document.createElement('li');
@@ -745,8 +712,10 @@ HTML_TEMPLATE = """
             const correctionsContainer = document.getElementById('corrections-container');
             const correctionsList = document.getElementById('corrections-list');
 
+            // Voltar
             document.getElementById('btn-back-theme').addEventListener('click', () => showStage('theme'));
 
+            // Estatísticas (DUA - Feedback imediato)
             poemEditor.addEventListener('input', () => {
                 appState.poemText = poemEditor.value;
                 const lines = appState.poemText.split('\\n');
@@ -757,23 +726,24 @@ HTML_TEMPLATE = """
                 document.getElementById('stat-stanzas').textContent = stanzas;
             });
 
+            // Buscar Rimas
             document.getElementById('btn-get-rhymes').addEventListener('click', async () => {
                 const word = rhymeInput.value.trim();
                 if (!word) return;
                 
-                rhymeResults.innerHTML = '<p class="text-gray-400 italic">Buscando...</p>';
+                rhymeResults.innerHTML = '<p class="text-slate-400 italic">Buscando...</p>';
                 const data = await fetchAPI('/api/find-rhymes', { word, theme: appState.chosenTheme });
                 
-                rhymeResults.innerHTML = '';
+                rhymeResults.innerHTML = ''; // Limpa
                 if (data && data.rhymes) {
                     if (data.rhymes[0].palavra === "Erro" || data.rhymes[0].palavra === "Puxa!") {
-                        rhymeResults.innerHTML = `<p class="text-gray-500">${data.rhymes[0].definicao}</p>`;
+                        rhymeResults.innerHTML = `<p class="text-slate-500">${data.rhymes[0].definicao}</p>`;
                     } else {
                         const list = document.createElement('ul');
                         list.className = 'space-y-1';
                         data.rhymes.forEach(r => {
                             const li = document.createElement('li');
-                            li.innerHTML = `<strong class="text-primary">${r.palavra}:</strong> <span class="text-gray-600">${r.definicao}</span>`;
+                            li.innerHTML = `<strong class="text-indigo-600">${r.palavra}:</strong> <span class="text-slate-600">${r.definicao}</span>`;
                             list.appendChild(li);
                         });
                         rhymeResults.appendChild(list);
@@ -783,6 +753,7 @@ HTML_TEMPLATE = """
                 }
             });
 
+            // Revisar Ortografia
             document.getElementById('btn-check-spelling').addEventListener('click', async () => {
                 if (!appState.poemText) return;
                 
@@ -809,21 +780,21 @@ HTML_TEMPLATE = """
 
                 Object.keys(errorsByVerse).sort((a,b) => a-b).forEach(verseNum => {
                     const verseDiv = document.createElement('div');
-                    verseDiv.className = 'py-3 border-b border-gray-200 last:border-b-0';
-                    verseDiv.innerHTML = `<h4 class="font-bold text-gray-600">No Verso ${verseNum}:</h4>`;
+                    verseDiv.className = 'py-3 border-b border-slate-200 last:border-b-0';
+                    verseDiv.innerHTML = `<h4 class="font-bold text-slate-600">No Verso ${verseNum}:</h4>`;
                     
                     errorsByVerse[verseNum].forEach(error => {
                         const errorDiv = document.createElement('div');
                         errorDiv.className = 'ml-4 mt-2';
                         errorDiv.innerHTML = `<p>Você escreveu <strong class="text-red-600 line-through">${error.original}</strong></p>
-                                            <p class="text-sm text-gray-500 italic mb-2">${error.reason}</p>`;
+                                            <p class="text-sm text-slate-500 italic mb-2">${error.reason}</p>`;
                         
                         const buttonsDiv = document.createElement('div');
                         buttonsDiv.className = 'flex flex-wrap gap-2';
                         error.suggestions.forEach(suggestion => {
                             const button = document.createElement('button');
                             button.textContent = suggestion;
-                            button.className = 'btn-secondary btn-correction';
+                            button.className = 'btn-correction';
                             button.onclick = () => applyCorrection(error.original, suggestion, error.verse_number);
                             buttonsDiv.appendChild(button);
                         });
@@ -837,10 +808,12 @@ HTML_TEMPLATE = """
             }
 
             function applyCorrection(original, suggestion, verseNum) {
+                // Lógica de substituição mais segura
                 const lines = poemEditor.value.split('\\n');
                 const lineIndex = verseNum - 1;
 
                 if (lines[lineIndex]) {
+                    // Substitui apenas a primeira ocorrência na linha correta, mantendo o caso
                     const regex = new RegExp(`\\b${original}\\b`, 'i');
                     if (regex.test(lines[lineIndex])) {
                          lines[lineIndex] = lines[lineIndex].replace(regex, suggestion);
@@ -848,15 +821,18 @@ HTML_TEMPLATE = """
                 }
                 
                 poemEditor.value = lines.join('\\n');
-                poemEditor.dispatchEvent(new Event('input'));
+                poemEditor.dispatchEvent(new Event('input')); // Atualiza estatísticas
 
+                // Remove o erro corrigido do estado
                 appState.currentErrors = appState.currentErrors.filter(err => 
                     !(err.original === original && err.verse_number == verseNum)
                 );
                 
+                // Re-renderiza a lista de correções
                 renderCorrections();
             }
 
+            // Concluir Poema
             document.getElementById('btn-finish-poem').addEventListener('click', () => {
                 if (appState.poemText.trim().length < 10) {
                     showToast("Seu poema parece um pouco curto. Escreva mais um pouco!");
@@ -876,7 +852,7 @@ HTML_TEMPLATE = """
                 const title = pdfTitle.value.trim();
                 const author = pdfAuthor.value.trim();
                 
-                if (!title) { // Autor é opcional
+                if (!title || !author) {
                     pdfError.classList.remove('hidden');
                     return;
                 }
@@ -884,12 +860,13 @@ HTML_TEMPLATE = """
                 
                 const blob = await fetchAPI('/api/generate-pdf', {
                     title,
-                    author: author || 'Autor Desconhecido', // Fallback para autor
+                    author,
                     text: appState.poemText,
                     theme: appState.chosenTheme
                 });
 
                 if (blob) {
+                    // Cria um link de download e simula o clique
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.style.display = 'none';
@@ -900,12 +877,11 @@ HTML_TEMPLATE = """
                     a.click();
                     window.URL.revokeObjectURL(url);
                     document.body.removeChild(a);
-                    showToast("PDF gerado com sucesso! 🎉");
                 }
             });
 
             // --- Inicialização ---
-            showLoading(false);
+            showLoading(false); // Garante que o loading esteja oculto
             showStage('interest');
         });
     </script>
@@ -923,6 +899,7 @@ def home():
 # --- 6. INICIALIZAÇÃO DA APLICAÇÃO ---
 
 if __name__ == '__main__':
+    # Verifica a chave de API na inicialização
     if not API_KEY:
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         print("!! AVISO: A GOOGLE_API_KEY não está configurada.         !!")
@@ -930,9 +907,12 @@ if __name__ == '__main__':
         print("!! funcionar. (ex: export GOOGLE_API_KEY='sua_chave')   !!")
         print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
     
+    # Inicializa o modelo na inicialização para verificar a chave
     get_model()
     
+    # Configura a porta para produção (Render) ou 5000 para desenvolvimento
     port = int(os.environ.get("PORT", 5000))
+    # 'debug=False' é crucial para produção no Render.
+    # 'host=0.0.0.0' é necessário para o Render.
     app.run(debug=False, host='0.0.0.0', port=port)
-
 
