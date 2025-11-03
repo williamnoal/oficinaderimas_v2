@@ -508,7 +508,7 @@ HTML_TEMPLATE = """
             display: none; /* Controlado por JS */
         }
         .hidden {
-            display: none;
+            display: none !important; /* FORÇA a regra, superando os IDs */
         }
 
         /* --- Estilos por Etapa --- */
@@ -910,12 +910,8 @@ HTML_TEMPLATE = """
                 Object.values(stages).forEach(stage => stage.classList.add('hidden'));
                 if (stages[stageId]) {
                     stages[stageId].classList.remove('hidden');
-                    // Garante que o layout flex seja aplicado corretamente
-                    if (stageId === 'writing') {
-                        stages[stageId].style.display = 'flex';
-                    } else {
-                        stages[stageId].style.display = 'flex'; // Usamos flex para centralizar
-                    }
+                    // Não é mais necessário definir o style.display aqui,
+                    // o CSS cuidará disso quando a classe .hidden for removida.
                 }
             }
 
@@ -1221,3 +1217,4 @@ if __name__ == '__main__':
     # 'debug=False' é crucial para produção no Render.
     # 'host=0.0.0.0' é necessário para o Render.
     app.run(debug=False, host='0.0.0.0', port=port)
+
