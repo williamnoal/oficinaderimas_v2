@@ -3,17 +3,16 @@ import re
 import json
 import google.generativeai as genai
 from flask import Flask, jsonify, request, Response, render_template_string
-from fpdf import FPDF
 from datetime import datetime
-from math import cos as _cos, sin as _sin
 from collections import defaultdict
+# NOVAS IMPORTAÇÕES PARA O MOTOR DE PDF
+from weasyprint import HTML, CSS
 
 # --- 1. CONFIGURAÇÃO DA APLICAÇÃO FLASK E API GEMINI ---
 
 app = Flask(__name__)
 
 # Configuração da API Key
-# O Render (serviço de deploy) irá injetar esta variável do "Environment"
 API_KEY = os.environ.get('GOOGLE_API_KEY')
 model = None
 
@@ -29,13 +28,13 @@ def get_model():
     
     try:
         genai.configure(api_key=API_KEY)
-        # SUCESSO! Usando o 'gemini-pro-latest' como modelo principal (O Confiável).
+        # Usando 'gemini-pro-latest' que foi validado pelo seu teste de API
         model = genai.GenerativeModel('gemini-pro-latest')
         print("Modelo 'gemini-pro-latest' configurado com sucesso.")
         return model
     except Exception as e:
         print(f"Erro ao configurar o 'gemini-pro-latest': {e}")
-        # Tenta o 'gemini-flash-latest' como fallback (O Rápido)
+        # Tenta o 'gemini-flash-latest' como fallback
         try:
             print("Tentando fallback para 'gemini-flash-latest'...")
             model = genai.GenerativeModel('gemini-flash-latest')
@@ -47,7 +46,7 @@ def get_model():
 
 def generate_ai_content(prompt_text, force_json=False):
     """Função central para chamadas de IA, com retry e parsing de JSON."""
-    model = get_model() # <- Corrigido para chamar a função correta
+    model = get_model()
     if model is None:
         raise Exception("Modelo de IA não inicializado. Verifique a API Key e as permissões no Google Cloud.")
 
@@ -70,37 +69,21 @@ def generate_ai_content(prompt_text, force_json=False):
             # Tenta carregar o JSON
             return json.loads(text)
         
-        # Retorna texto plano se não for JSON
+        # Retorna texto plano (para o novo PDF CSS)
         return text
 
     except Exception as e:
         print(f"Erro na geração de conteúdo da IA: {e}")
-        print(f"Prompt que falhou: {prompt_text}")
-        # Tenta extrair a resposta de erro da API se disponível
-        try:
-            # Tenta extrair a mensagem de erro específica do gRPC/Google
-            if hasattr(e, 'message'):
-                error_message = e.message
-            elif hasattr(e, 'args') and e.args:
-                error_message = str(e.args[0])
-            else:
-                error_message = str(e)
-
-            # Verifica se o erro é o 404 que estávamos vendo
-            if "is not found" in error_message:
-                 print("!! ERRO 404 DETECTADO: Verifique o nome do modelo e as permissões da API Key !!")
-                 raise Exception(f"Erro 404 da API Gemini: {error_message}")
-            
-            raise Exception(f"Falha ao gerar ou processar resposta da IA: {error_message}")
-
-        except json.JSONDecodeError:
-            print(f"Erro de JSON: A IA não retornou um JSON válido. Resposta: {text}")
-            raise Exception(f"A IA não retornou um JSON válido. Resposta: {text}")
-        except Exception as e_inner:
-             raise e_inner # Mantém a exceção original
+        # Simplifica a extração de erro para depuração
+        error_message = str(e)
+        if "is not found" in error_message:
+             print("!! ERRO 404 DETECTADO: Verifique o nome do modelo e as permissões da API Key !!")
+             raise Exception(f"Erro 404 da API Gemini: {error_message}")
+        
+        raise Exception(f"Falha ao gerar ou processar resposta da IA: {error_message}")
 
 
-# --- 2. LÓGICA DE IA PEDAGÓGICA (PROMPTS OTIMIZADOS) ---
+# --- 2. LÓGICA DE IA PEDAGÓGICA (PROMPTS OTIMIZADOS - V3) ---
 
 @app.route('/api/generate-themes', methods=['POST'])
 def api_generate_themes():
@@ -137,55 +120,51 @@ def api_generate_themes():
         print(f"[API /api/generate-themes] Erro: {e}")
         return jsonify({"error": str(e)}), 500
 
-# --- NOVO ENDPOINT DE IDEIAS ESTÁTICAS ---
 @app.route('/api/get-ideas', methods=['POST'])
 def api_get_ideas():
     """
-    (DUA - Suporte)
+    (BNCC - EF67LP31)
     Gera 5 ideias de progressão temática estáticas com base no tema.
     """
     data = request.json
     theme = data.get('theme')
-    if not theme:
-        return jsonify({"error": "Nenhum tema fornecido."}), 400
 
-    # PROMPT OTIMIZADO: Pede 5 ideias focadas nos sentidos (BNCC/DUA).
+    # PROMPT OTIMIZADO: Gera 5 ideias de progressão.
     prompt = f"""
-    Aja como um professor de escrita criativa. O tema do poema é '{theme}'.
-    Gere uma lista de 5 ideias CURTAS (máximo 10 palavras cada) para um aluno do 6º ano.
-    As ideias devem ser perguntas ou comandos para inspirar a escrita.
+    Aja como um professor de escrita criativa experiente, guiando um aluno de 11 a 13 anos.
+    O tema do poema é '{theme}'.
+    Sua tarefa é criar uma lista de 5 ideias de como progredir na escrita, focando nos sentidos.
 
     REGRAS:
-    1.  Foco nos 5 sentidos (visão, som, cheiro, tato, paladar).
-    2.  Seja simples e lúdico.
-    3.  Retorne APENAS uma lista de 5 strings em JSON.
+    1.  **Foco nos Sentidos:** Incentive o aluno a pensar em cheiros, sons, cores e sensações.
+    2.  **Simplicidade:** Use um vocabulário direto e acessível.
+    3.  **Formato:** As ideias devem ser perguntas curtas ou comandos criativos.
+    4.  **NÃO ESCREVA VERSOS:** Apenas as 5 ideias.
     
-    Exemplo de Resposta:
-    ["O que você vê quando pensa em {theme}?", "Qual é o som do {theme}?", "Que cheiro tem o {theme}?", "Como seria tocar o {theme}?", "Tente comparar {theme} com um animal."]
+    Formato da Resposta OBRIGATÓRIO (JSON):
+    [
+        "Ideia 1...",
+        "Ideia 2...",
+        "Ideia 3...",
+        "Ideia 4...",
+        "Ideia 5..."
+    ]
     """
     try:
         ideas = generate_ai_content(prompt, force_json=True)
-        if not isinstance(ideas, list) or len(ideas) == 0:
-            raise Exception("A IA não retornou uma lista de ideias.")
-        
-        # Garante que temos exatamente 5 ideias
-        if len(ideas) > 5:
-            ideas = ideas[:5]
-        elif len(ideas) < 5:
-            # Fallback caso a IA falhe
+        if not isinstance(ideas, list) or len(ideas) != 5:
+            # Fallback em caso de falha da IA
             ideas = [
-                f"Como é o cheiro de '{theme}'?",
-                f"Qual é o som principal de '{theme}'?",
-                f"Que cores você vê em '{theme}'?",
-                f"O que '{theme}' faz você sentir?",
-                f"Tente comparar '{theme}' com outra coisa."
+                f"Que *cor* o tema '{theme}' teria?",
+                f"Qual é o *cheiro* que te lembra '{theme}'?",
+                f"Tente descrever o *som* principal de '{theme}'.",
+                f"Como seria *tocar* em '{theme}'? (É macio, áspero, frio?)",
+                "Tente usar uma *comparação* (ex: 'rápido como...' ou 'brilhante como...')."
             ]
-            
         return jsonify({"ideas": ideas})
     except Exception as e:
         print(f"[API /api/get-ideas] Erro: {e}")
         return jsonify({"error": str(e)}), 500
-# --- FIM DO NOVO ENDPOINT ---
 
 @app.route('/api/find-rhymes', methods=['POST'])
 def api_find_rhymes():
@@ -213,8 +192,8 @@ def api_find_rhymes():
     - Se possível, e apenas se a REGRA 1 for 100% cumprida, prefira palavras do tema '{theme}'.
     - Evite palavras arcaicas ou complexas.
 
-    **Formato da Resposta:**
-    Retorne uma lista de objetos JSON. Cada objeto deve ter:
+    **Formato da Resposta OBRIGATÓRIO (JSON):**
+    Retorne uma lista de objetos. Cada objeto deve ter:
     - "palavra": A palavra que rima.
     - "definicao": Uma definição muito curta e simples (máximo 5 palavras).
     Retorne no mínimo 8 sugestões, se possível.
@@ -284,77 +263,8 @@ def api_check_poem():
         return jsonify({"error": str(e)}), 500
 
 
-# --- 3. LÓGICA DE GERAÇÃO DE PDF (fpdf2) ---
-
-class PoemPDF(FPDF):
-    """Classe customizada do FPDF para gerar o PDF com bordas e estilos da IA."""
-    def __init__(self, style_guide, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.style = style_guide
-        # Converte cores hex para RGB
-        try:
-            self.bg_r, self.bg_g, self.bg_b = tuple(int(self.style.get('bg_color_hex', '#FFFFFF').lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-            self.text_r, self.text_g, self.text_b = tuple(int(self.style.get('text_color_hex', '#000000').lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-            self.title_r, self.title_g, self.title_b = tuple(int(self.style.get('title_color_hex', '#000000').lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-            self.border_r, self.border_g, self.border_b = tuple(int(self.style.get('border_color_hex', '#4682B4').lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-        except Exception as e:
-            print(f"Erro ao converter cores HEX: {e}. Usando padrões.")
-            self.bg_r, self.bg_g, self.bg_b = (240, 248, 255) # AliceBlue
-            self.text_r, self.text_g, self.text_b = (47, 79, 79)     # DarkSlateGray
-            self.title_r, self.title_g, self.title_b = (255, 99, 71)   # Tomato
-            self.border_r, self.border_g, self.border_b = (70, 130, 180)  # SteelBlue
-
-    def header(self):
-        self.set_fill_color(self.bg_r, self.bg_g, self.bg_b)
-        self.rect(0, 0, self.w, self.h, 'F')
-        self.draw_border()
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Helvetica', 'I', 8)
-        self.set_text_color(128)
-        self.cell(0, 10, f'Gerado pela Oficina de Poemas - {datetime.now().strftime("%d/%m/%Y")}', 0, 0, 'C')
-
-    def draw_border(self):
-        style = self.style.get('border_style', 'simples')
-        self.set_draw_color(self.border_r, self.border_g, self.border_b)
-        
-        if style == 'dupla':
-            self.set_line_width(1)
-            self.rect(5, 5, self.w - 10, self.h - 10)
-            self.set_line_width(0.5)
-            self.rect(7, 7, self.w - 14, self.h - 14)
-        elif style == 'ondas':
-            self.draw_waves()
-        elif style == 'estrelas':
-            self.draw_stars()
-        else: # Padrão 'simples'
-            self.set_line_width(1)
-            self.rect(5, 5, self.w - 10, self.h - 10)
-
-    def draw_waves(self):
-        margin, step, amplitude = 10, 5, 2
-        self.set_line_width(0.5)
-        for x in range(margin, int(self.w - margin), step):
-            self.curve(x, margin, x + step / 2, margin - amplitude, x + step, margin)
-            self.curve(x, self.h - margin, x + step / 2, self.h - margin + amplitude, x + step, self.h - margin)
-        for y in range(margin, int(self.h - margin), step):
-            self.curve(margin, y, margin - amplitude, y + step/2, margin, y + step)
-            self.curve(self.w - margin, y, self.w - margin + amplitude, y + step/2, self.w - margin, y + step)
-
-    def draw_stars(self):
-        self.set_line_width(0.2)
-        self.set_fill_color(self.border_r, self.border_g, self.border_b)
-        self.draw_star(20, 20); self.draw_star(self.w - 20, 20)
-        self.draw_star(20, self.h - 20); self.draw_star(self.w - 20, self.h - 20)
-
-    def draw_star(self, x, y, size=10):
-        p = []
-        for i in range(5):
-            angle = i * 2 * 3.14159 / 5 - 3.14159 / 2
-            radius = size if i % 2 == 0 else size / 2.5
-            p.append((x + radius * _cos(angle), y + radius * _sin(angle)))
-        self.polygon(p, 'F')
+# --- 3. NOVO MOTOR DE GERAÇÃO DE PDF (WeasyPrint) ---
+# Esta seção foi completamente refeita para usar HTML+CSS.
 
 @app.route('/api/generate-pdf', methods=['POST'])
 def api_generate_pdf():
@@ -365,60 +275,88 @@ def api_generate_pdf():
         return jsonify({"error": "Dados incompletos para PDF"}), 400
 
     try:
-        # PROMPT OTIMIZADO: Mais restrito para garantir saída JSON válida.
+        # 1. GERAR O CSS COM A IA
+        # PROMPT TOTALMENTE NOVO: Focado em gerar CSS.
         style_prompt = f"""
-        Aja como um designer gráfico. O tema do poema é "{data['theme']}".
-        Retorne um objeto JSON com uma paleta de design lúdica.
+        Aja como um designer web e gráfico. O tema do poema é "{data['theme']}".
+        Sua tarefa é gerar uma string de CSS para estilizar um PDF de poema.
 
-        **Chaves obrigatórias no JSON:**
-        - "font": Escolha UMA: "Courier", "Helvetica", "Times".
-        - "bg_color_hex": Cor de fundo suave (ex: "#F0F8FF").
-        - "text_color_hex": Cor de texto escura e legível (ex: "#333333").
-        - "title_color_hex": Cor de destaque para o título (ex: "#FF6347").
-        - "border_style": Escolha UM: "simples", "dupla", "ondas", "estrelas".
-        - "border_color_hex": Cor para a borda (ex: "#4682B4").
+        REGRAS:
+        1.  Gere CSS para as tags: `body`, `h1`, `p`, e a classe `.author`.
+        2.  O design deve ser LÚDICO, COLORIDO e FÁCIL DE LER (bom contraste).
+        3.  Use fontes seguras (font-family): 'Times New Roman', 'Arial', 'Courier New', 'Helvetica', 'sans-serif'.
+        4.  Para o `body`, defina `background-color` (uma cor suave) e `color` (uma cor escura para o texto).
+        5.  Para o `h1` (título), defina `color` (uma cor de destaque), `font-size` e `text-align: center`.
+        6.  Para o `p` (poema), defina `font-size` (ex: 12pt) e `line-height` (ex: 1.5).
+        7.  Para a classe `.author` (autor), defina `text-align: right`, `font-style: italic`, e `margin-top: 20px`.
+        8.  Retorne APENAS a string CSS, sem ````css` ou qualquer outra palavra.
+
+        EXEMPLO DE RESPOSTA (APENAS O TEXTO CSS):
+        body {{
+            font-family: Arial, sans-serif;
+            background-color: #F0F8FF;
+            color: #333333;
+        }}
+        h1 {{
+            font-family: 'Times New Roman', serif;
+            color: #FF6347;
+            font-size: 24pt;
+            text-align: center;
+            border-bottom: 2px solid #FF6347;
+            padding-bottom: 10px;
+        }}
+        p {{
+            font-size: 12pt;
+            line-height: 1.6;
+            margin-bottom: 10px; /* Espaço entre estrofes */
+        }}
+        .author {{
+            text-align: right;
+            font-style: italic;
+            margin-top: 30px;
+            font-size: 14pt;
+            color: #555555;
+        }}
         """
         
         try:
-            style = generate_ai_content(style_prompt, force_json=True)
-            if not isinstance(style, dict):
-                raise Exception("Estilo retornado não é um dicionário.")
+            # force_json=False porque esperamos uma string de texto (CSS)
+            css_string = generate_ai_content(style_prompt, force_json=False)
+            if "{" not in css_string or "}" not in css_string:
+                raise Exception("Estilo CSS retornado pela IA é inválido.")
         except Exception as e:
             print(f"Falha ao gerar estilo de IA, usando padrão. Erro: {e}")
-            style = {
-                "font": "Helvetica", "bg_color_hex": "#F0F8FF", 
-                "text_color_hex": "#2F4F4F", "title_color_hex": "#FF6347",
-                "border_style": "simples", "border_color_hex": "#4682B4"
-            }
+            css_string = """
+            body { font-family: Arial, sans-serif; background-color: #F0F8FF; color: #333; }
+            h1 { color: #FF6347; font-size: 24pt; text-align: center; border-bottom: 2px solid #FF6347; padding-bottom: 10px; }
+            p { font-size: 12pt; line-height: 1.6; margin-bottom: 10px; }
+            .author { text-align: right; font-style: italic; margin-top: 30px; font-size: 14pt; }
+            """
 
-        # Gera o PDF em memória
-        pdf = PoemPDF(style)
-        pdf.add_page()
+        # 2. GERAR O HTML
+        # Converte as quebras de linha do poema em tags <br> e agrupa estrofes em <p>
+        poem_html = "".join(f"<p>{stanza.replace(os.linesep, '<br>')}</p>" for stanza in data['text'].split(os.linesep * 2))
+
+        html_template = f"""
+        <html>
+            <head>
+                <meta charset="UTF-8">
+                <style>{css_string}</style>
+            </head>
+            <body>
+                <h1>{data['title']}</h1>
+                {poem_html}
+                <p class="author">- {data['author']}</p>
+            </body>
+        </html>
+        """
+
+        # 3. RENDERIZAR O PDF (Motor WeasyPrint)
+        html = HTML(string=html_template)
+        # Passamos a string CSS diretamente para o WeasyPrint
+        pdf_bytes = html.write_pdf() # Não precisamos mais da folha de estilo separada
         
-        # Adiciona Título
-        pdf.set_font(style.get('font', 'Helvetica'), 'B', 24)
-        pdf.set_text_color(pdf.title_r, pdf.title_g, pdf.title_b)
-        pdf.multi_cell(0, 15, data['title'], align='C')
-        pdf.ln(20)
-        
-        # Adiciona Poema
-        pdf.set_font(style.get('font', 'Helvetica'), '', 12)
-        pdf.set_text_color(pdf.text_r, pdf.text_g, pdf.text_b)
-        # Corrige encoding para FPDF (latin-1)
-        poem_text_encoded = data['text'].encode('latin-1', 'replace').decode('latin-1')
-        pdf.multi_cell(0, 10, poem_text_encoded)
-        pdf.ln(10)
-        
-        # Adiciona Autor
-        pdf.set_font(style.get('font', 'Helvetica'), 'I', 14)
-        author_encoded = data['author'].encode('latin-1', 'replace').decode('latin-1')
-        pdf.multi_cell(0, 10, f'- {author_encoded}', align='R')
-        
-        # CORREÇÃO: pdf.output() já retorna 'bytes' (bytearray) no fpdf2.
-        # Não precisamos (e não podemos) chamar .encode() nele.
-        pdf_bytes = pdf.output()
-        
-        # Retorna o PDF como um arquivo para download
+        # 4. RETORNAR O PDF
         safe_filename = re.sub(r'[^a-z0-9]', '_', data['title'].lower(), re.IGNORECASE) or 'poema'
         
         return Response(
@@ -432,7 +370,7 @@ def api_generate_pdf():
         return jsonify({"error": f"Erro interno ao gerar PDF: {e}"}), 500
 
 
-# --- 4. TEMPLATE DO FRONTEND (HTML/CSS/JS) ---
+# --- 4. TEMPLATE DO FRONTEND (HTML/CSS/JS - V3) ---
 
 # Frontend completo embutido em uma string Python.
 # Usa TailwindCSS para um design moderno e acessível (DUA).
@@ -444,9 +382,9 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oficina de Poemas - Python (Flask)</title>
     <!-- Carrega TailwindCSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com)"></script>
     <!-- Carrega Fontes (Lúdica + Padrão) -->
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Playpen+Sans:wght@400;600&display=swap" rel="stylesheet">
+    <link href="[https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Playpen+Sans:wght@400;600&display=swap](https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Playpen+Sans:wght@400;600&display=swap)" rel="stylesheet">
     <style>
         /* Estilos customizados (DUA/Lúdico) */
         body {
@@ -585,14 +523,14 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
-                <!-- *** MUDANÇA: Inspiração Criativa (Lista Estática) *** -->
+                <!-- 5 Ideias de Progressão (NOVO - V3) -->
                 <div class="card">
                     <h3 class="text-xl font-bold mb-4 text-slate-700">💡 Inspiração Criativa</h3>
-                    <div id="inspiration-area" class="space-y-3 overflow-y-auto p-3 bg-slate-50 rounded-lg max-h-48 min-h-[100px]">
-                        <p class="text-slate-500 italic text-sm">Carregando ideias para o seu tema...</p>
-                    </div>
+                    <ul id="progression-ideas-list" class="list-disc list-inside space-y-2 text-slate-600">
+                        <!-- 5 ideias serão inseridas aqui pelo JS -->
+                        <li class="italic text-slate-400">Aguardando ideias...</li>
+                    </ul>
                 </div>
-                <!-- *** FIM DA MUDANÇA *** -->
                 
                 <!-- Estatísticas -->
                 <div class="card">
@@ -747,28 +685,24 @@ HTML_TEMPLATE = """
                 appState.chosenTheme = theme;
                 document.getElementById('chosen-theme-title').textContent = theme;
                 
-                // *** MUDANÇA: Limpa e busca 5 ideias estáticas ***
-                const inspirationArea = document.getElementById('inspiration-area');
-                inspirationArea.innerHTML = '<p class="text-slate-500 italic text-sm">Buscando ideias para o seu tema...</p>';
+                // NOVO (V3): Busca as 5 ideias de progressão
+                const ideasList = document.getElementById('progression-ideas-list');
+                ideasList.innerHTML = '<li class="italic text-slate-400">A carregar ideias...</li>';
                 
-                showStage('writing');
-
-                // Busca as 5 ideias estáticas APÓS mostrar a tela
                 const data = await fetchAPI('/api/get-ideas', { theme });
+                
+                ideasList.innerHTML = ''; // Limpa
                 if (data && data.ideas) {
-                    inspirationArea.innerHTML = ''; // Limpa
-                    const list = document.createElement('ul');
-                    list.className = 'list-disc list-inside space-y-2 text-slate-700';
                     data.ideas.forEach(idea => {
                         const li = document.createElement('li');
                         li.textContent = idea;
-                        list.appendChild(li);
+                        ideasList.appendChild(li);
                     });
-                    inspirationArea.appendChild(list);
                 } else {
-                    inspirationArea.innerHTML = '<p class="text-red-500">Não foi possível carregar as ideias.</p>';
+                    ideasList.innerHTML = '<li class="italic text-red-500">Erro ao carregar ideias.</li>';
                 }
-                // *** FIM DA MUDANÇA ***
+                
+                showStage('writing');
             }
 
             // --- ETAPA 3: Lógica da Oficina de Escrita ---
@@ -777,7 +711,7 @@ HTML_TEMPLATE = """
             const rhymeResults = document.getElementById('rhyme-results');
             const correctionsContainer = document.getElementById('corrections-container');
             const correctionsList = document.getElementById('corrections-list');
-            
+
             // Voltar
             document.getElementById('btn-back-theme').addEventListener('click', () => showStage('theme'));
 
@@ -791,8 +725,6 @@ HTML_TEMPLATE = """
                 document.getElementById('stat-verses').textContent = verses;
                 document.getElementById('stat-stanzas').textContent = stanzas;
             });
-
-            // *** REMOVIDO: Event listener do btn-get-feedback (Tutor Interativo) ***
 
             // Buscar Rimas
             document.getElementById('btn-get-rhymes').addEventListener('click', async () => {
@@ -983,5 +915,4 @@ if __name__ == '__main__':
     # 'debug=False' é crucial para produção no Render.
     # 'host=0.0.0.0' é necessário para o Render.
     app.run(debug=False, host='0.0.0.0', port=port)
-
 
