@@ -29,11 +29,11 @@ def get_model():
     
     try:
         genai.configure(api_key=API_KEY)
-        model = genai.GenerativeModel('gemini-pro-latest')
-        print("Modelo 'gemini-pro-latest' configurado com sucesso.")
+        model = genai.GenerativeModel('gemini-flash-latest')
+        print("Modelo 'gemini-flash-latest' configurado com sucesso.")
         return model
     except Exception as e:
-        print(f"Erro ao configurar o 'gemini-pro-latest': {e}")
+        print(f"Erro ao configurar o 'gemini-flash-latest': {e}")
         try:
             print("Tentando fallback para 'gemini-flash-latest'...")
             model = genai.GenerativeModel('gemini-flash-latest')
