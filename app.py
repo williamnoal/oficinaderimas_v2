@@ -794,13 +794,13 @@ HTML_TEMPLATE = """
             <button id="btn-back-interest" class="btn-secondary">← Voltar</button>
         </div>
 
-        <!-- ETAPA 3: Oficina de Escrita (Layout principal) -->
+        <!-- ETAPA 3: Oficina de Poemas (Layout principal) -->
         <div id="stage-writing" class="stage hidden">
             
             <!-- Coluna Principal: Editor e Correções -->
             <main>
                 <header class="card">
-                    <h1>✍️ Oficina de Escrita</h1>
+                    <h1>✍️ Oficina de Poemas</h1>
                     <p>Tema: <strong id="chosen-theme-title"></strong></p>
                 </header>
                 
@@ -1014,7 +1014,7 @@ HTML_TEMPLATE = """
                 showStage('writing');
             }
 
-            // --- ETAPA 3: Lógica da Oficina de Escrita ---
+            // --- ETAPA 3: Lógica da Oficina de Poemas ---
             const poemEditor = document.getElementById('poem-editor');
             const rhymeInput = document.getElementById('rhyme-input');
             const rhymeResults = document.getElementById('rhyme-results');
